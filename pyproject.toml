@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "ditscover"
+version = "0.1.0"
+description = "Unsupervised variable-length motif discovery in time series with NSGA-II"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.26", "plotly>=5.20"]
+
+[project.optional-dependencies]
+dev = ["maturin>=1.9,<2", "pytest>=8", "ruff>=0.6", "pandas>=2"]
+
+[project.scripts]
+ditscover = "ditscover.cli:main"
+
+[tool.maturin]
+manifest-path = "crates/py/Cargo.toml"
+python-source = "python"
+module-name = "ditscover._core"
+features = ["pyo3/extension-module"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["python", "tests/python"]
+extend-exclude = [".specify", "specs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]

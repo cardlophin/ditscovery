@@ -1,0 +1,32 @@
+[package]
+name = "ditscover-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "ditscover_core"
+
+[dependencies]
+rayon = "1.12"
+rand = "0.9"
+rand_chacha = "0.9"
+rand_distr = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_yaml_ng = "0.10"
+csv = "1.4"
+crossbeam-channel = "0.5"
+tracing = "0.1"
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1.11"
+criterion = "0.8"
+
+[[bench]]
+name = "ga"
+harness = false
+
+[lints]
+workspace = true

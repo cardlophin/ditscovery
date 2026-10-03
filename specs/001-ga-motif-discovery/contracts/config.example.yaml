@@ -1,0 +1,23 @@
+seed: 42
+data: {path: data/kaggle-electric-production.csv, column: IPG2211A2N, delimiter: ",", header: true}
+preprocess:
+  - nan: interpolate
+  - detrend: linear
+  - normalize: zscore
+motif: {min_len: 10, max_len: 16, max_stretch: 1.5, min_occ: 2, max_occ: 20, min_gap: 0, min_std: 1.0e-6}
+distance: {kind: zeuclid, band: 0.1}   # kind: zeuclid | euclid | dtw (band only for DTW)
+ga:
+  population: 200
+  crossover: 0.9
+  shift: 0.3
+  stretch: 0.2
+  add: 0.2
+  remove: 0.1
+  sigma_shift: 0.1
+  sigma_stretch: 0.1
+  scan_step: 0.125
+  init_greedy: 0.5
+  niche_jaccard: 0.5
+stop: {max_generations: 300, time_budget_s: null, stagnation_window: 30, stagnation_delta: 1.0e-4}
+output: {dir: ditscover-out, top_k: 5, dedupe_jaccard: 0.3, snapshot_every: 10}
+log: {level: info, log_every: 10, history: true, channel_capacity: 1024}
