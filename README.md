@@ -1,124 +1,47 @@
-# ditscover
+<div align="center">
 
-Unsupervised discovery of **variable-length motifs** in univariate time series with a
-**multi-objective genetic algorithm** (NSGA-II). The engine is pure Rust, exposed to Python
-through PyO3, with a command-line tool and interactive Plotly reports.
+# 🧬 ditscover
 
-A *motif* is a pattern that repeats along a series. In real data each repetition rarely has the
-same duration: one yearly cycle may last 11 months and the next 13. `ditscover` finds those
-patterns **without labels and without fixing their length in advance**, and returns several
-distinct motifs instead of a single "best" one.
+### Discover repeating patterns. Let their length vary.
 
-## How it helps
+Unsupervised discovery of variable-length motifs in univariate time series.<br>
+A pure Rust engine, a Python API, and interactive Plotly reports.
 
-- **Find what repeats** in sensor readings, demand, production or physiological signals, with no
-  training data.
-- **Tolerate stretched repetitions:** occurrences of one motif may differ in length (up to
-  `max_stretch`), unlike fixed-window methods.
-- **No weights to tune:** support, cohesion and length are optimised together as a Pareto front.
-  You get the trade-offs and pick the motif that fits your question.
-- **Reproducible:** the same seed and config give identical results on 1 or N threads.
-- **Fast and parallel:** 10,000 points × 200 individuals × 300 generations runs in under 1 s on
-  an Apple M4.
-- **One-line use** from a notebook, or batch runs from YAML on a server.
+![Rust](https://img.shields.io/badge/Engine-Rust-dea584?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square)
+![NSGA-II](https://img.shields.io/badge/Optimization-NSGA--II-8b5cf6?style=flat-square)
+![Plotly](https://img.shields.io/badge/Reports-Plotly-06b6d4?style=flat-square)
 
-## How it works
+[Quick start](#-quick-start) ·
+[Usage](#-usage) ·
+[How it works](#-how-it-works) ·
+[Examples](#-example-analyses) ·
+[Development](#-development)
 
-Each individual is a candidate motif: a list of `k` non-overlapping segments `(start, length)`.
-NSGA-II evolves the population against three objectives:
+</div>
 
-| Objective | Meaning | Direction |
-|---|---|---|
-| Support | number of occurrences `k` | maximise |
-| Cohesion | mean distance of each occurrence to the prototype (occurrences resampled to a common length) | minimise |
-| Length | mean occurrence length | maximise |
+---
 
-- **Initialisation:** individuals are random or seeded (a random seed window plus its best
-  matches found by scanning the series).
-- **Variation:** donation crossover (a child absorbs the other parent's occurrences that fit its
-  shape) and shift, stretch, add and remove mutations. A `repair` step keeps every individual
-  valid.
-- **Selection:** NSGA-II with clearing by occurrence overlap (Jaccard), so the population keeps
-  several distinct motifs.
-- **Distances:** z-normalised Euclidean (default), raw Euclidean, or DTW with a Sakoe-Chiba band.
-- **Stopping:** maximum generations, time budget, hypervolume stagnation or Ctrl+C. The best
-  result so far is always returned.
+A *motif* is a pattern that repeats along a time series—but not always for the same duration. One cycle may last 11 months, the next 13.
 
-## Architecture
+`ditscover` finds these patterns **without labels or a fixed window length**. Instead of returning one “best” answer, it discovers distinct motifs and exposes the trade-offs between their frequency, similarity, and length.
 
-```mermaid
-flowchart LR
-    R([Researcher]) -->|notebook| API[Python API<br/>ds.discover]
-    R -->|terminal| CLI[CLI<br/>ditscover run]
-    API --> B[PyO3 binding<br/>GIL released, Ctrl+C]
-    CLI -->|YAML + --set| B
-    CLI -->|plot DIR| P[Plotly views]
-    B -->|Config::build| CFG[Config<br/>build, validate]
-    B -.->|load_data| L[CsvLoader]
-    CSV[(Input CSV/TSV)] --> L
-    B --> D["discover()"]
-    D --> PRE[Preprocess<br/>Step pipeline]
-    PRE --> E[NSGA-II engine<br/>Rayon, seeded RNG]
-    E --> OPS[Operators]
-    E --> EV[Evaluation]
-    E --> S[Survival<br/>fronts, clearing]
-    E -.->|try_send| CH[[Event channel]] --> LOG[Logger thread]
-    E --> RES[Result<br/>top-K, front]
-    RES -->|"save()"| OUT[(Results dir)]
-    LOG -->|history.jsonl| OUT
-```
+| | What you get |
+|:--|:--|
+| 🔎 Discovery without labels | Find repeated patterns in sensor, demand, production, or physiological data. |
+| ↔️ Flexible duration | Match stretched or compressed repetitions, within `max_stretch`. |
+| ⚖️ Multi-objective search | Optimize support, cohesion, and length together—without choosing objective weights. |
+| 🎲 Reproducible runs | The same seed and configuration produce identical results on 1 or N threads. |
+| ⚡ Parallel Rust engine | A reference run with 10,000 points, 200 individuals, and 300 generations took 0.87 s on Apple M4. |
+| 🐍 Python and CLI | Explore in a notebook or run YAML-based experiments on a server. |
 
-A detailed interactive version, with every component linked to its source lines, is in
-[`.archify/architecture-ditscover-overview-20261003-180638/ditscover-overview.html`](.archify/architecture-ditscover-overview-20261003-180638/ditscover-overview.html)
-(open it in a browser; it was generated with Archify).
+> ⚠️ **Status:** planted-motif recovery remains an open problem. High-support results can include background windows; inspect the Pareto front and review the [known limitations](#-development) before relying on the selected motifs.
 
-Design rules (see [`.specify/memory/constitution.md`](.specify/memory/constitution.md)):
+## 🚀 Quick start
 
-- All algorithm code lives in `crates/core`, testable with `cargo test` and no Python.
-- The binding and the Python package only convert types and delegate.
-- One serialisable `Config` is shared by YAML, CLI flags and Python kwargs, with the same names.
-- Logging goes through a bounded channel and never blocks the GA. When the channel is full,
-  events are dropped and counted.
+Requirements: Rust 1.85+ with edition 2024 support, Python 3.12+, and [uv](https://docs.astral.sh/uv/).
 
-## Repository layout
-
-```text
-.
-├── Cargo.toml                 # Rust workspace
-├── pyproject.toml             # maturin build, ruff, pytest
-├── crates/
-│   ├── core/                  # ditscover-core: the whole algorithm (pure Rust)
-│   │   ├── src/
-│   │   │   ├── lib.rs         # discover(): validate → preprocess → engine → result → save
-│   │   │   ├── config.rs      # Config, defaults, validation, leaf overrides
-│   │   │   ├── io.rs          # Loader trait, CsvLoader
-│   │   │   ├── preprocess.rs  # nan / detrend / smooth / normalize / paa steps
-│   │   │   ├── series.rs      # Series + origin map, prefix-sum statistics
-│   │   │   ├── distance.rs    # resample, z-normalise, Euclidean, DTW
-│   │   │   ├── motif.rs       # Segment, Individual, evaluation, prototype, Jaccard
-│   │   │   ├── ops.rs         # init, crossover, mutations, repair
-│   │   │   ├── nsga.rs        # non-dominated sort, crowding, clearing, 3D hypervolume
-│   │   │   ├── engine.rs      # generation loop, deterministic RNG, stop criteria
-│   │   │   ├── events.rs      # event channel + logger thread (JSONL, tracing)
-│   │   │   ├── result.rs      # top-K, RunResult, save/load
-│   │   │   └── synth.rs       # synthetic series with planted motifs + IoU metrics
-│   │   ├── tests/             # config, io, invariants (proptest), determinism, planted, ...
-│   │   └── benches/ga.rs      # criterion benchmarks
-│   └── py/                    # ditscover-py: PyO3 bindings (ditscover._core)
-├── python/ditscover/          # Python package: API, CLI, Plotly views
-├── tests/python/              # pytest: API, CLI, plots
-├── configs/                   # example YAML configurations
-├── data/                      # example datasets
-├── results/                   # saved runs (one folder per config)
-├── docs/images/               # figures used in this README
-├── scripts/bench_check.py     # fails if a benchmark regresses > 10 %
-├── specs/001-ga-motif-discovery/  # spec, plan, research, data model, contracts, tasks
-└── .archify/                  # interactive architecture diagram
-```
-
-## Installation
-
-Requirements: Rust (edition 2024, 1.85+), Python ≥ 3.12 and [`uv`](https://docs.astral.sh/uv/).
+From the repository root:
 
 ```bash
 uv venv
@@ -126,137 +49,277 @@ uv pip install -e '.[dev]'
 uv run maturin develop --release
 ```
 
-This installs the `ditscover` Python package and the `ditscover` command.
+This installs the Python package and the `ditscover` command.
 
-## Usage
-
-### Python
+Discover motifs and open an interactive report:
 
 ```python
 import ditscover as ds
 
 res = ds.discover(
-    "data/kaggle-electric-production.csv", column="IPG2211A2N",
-    min_len=9, max_len=15, preprocess=[{"detrend": "linear"}], seed=1,
+    "data/kaggle-electric-production.csv",
+    column="IPG2211A2N",
+    min_len=9,
+    max_len=15,
+    preprocess=[{"detrend": "linear"}],
+    seed=1,
 )
-res.plot()                       # self-contained HTML report (works offline)
 
-for m in res.motifs:             # top-K distinct motifs
-    print(m.support, m.cohesion, m.mean_len, m.occurrences[:3])
+res.plot()  # Self-contained HTML report; works offline.
+
+for motif in res.motifs:
+    print(
+        motif.support,
+        motif.cohesion,
+        motif.mean_len,
+        motif.occurrences[:3],
+    )
 ```
 
-- Input can be a CSV/TSV path, a `numpy` array, a list or a `pandas.Series`.
-- Any config field can be passed as a keyword with its YAML name, for example
-  `population=300` or `kind="dtw"`.
-- `min_len` and `max_len` are measured on the **preprocessed** series. Positions are always
-  reported in original indices.
-- `res.save(dir)` and `ds.load(dir)` save and restore a run.
+## 🐍 Usage
 
-### Command line
+**Python API**
+
+- Accepts a CSV/TSV path, NumPy array, list, or pandas Series.
+- Accepts configuration fields as keyword arguments using their YAML names: for example, `population=300` or `kind="dtw"`.
+- Measures `min_len` and `max_len` on the preprocessed series, while reporting positions in original indices.
+- Saves and restores runs with `res.save(directory)` and `ds.load(directory)`.
+- Exposes selected motifs through `res.motifs` and the Pareto front through `res.front`.
+
+**Command line**
 
 ```bash
-ditscover run configs/electric-production.yaml               # writes to output.dir
-ditscover run configs/electric-production.yaml --seed 7 --set population=300 --plot
-ditscover plot results/electric-production                   # report.html from a saved run
+# Run a configuration and save to output.dir.
+ditscover run configs/electric-production.yaml
+
+# Override settings and generate a report.
+ditscover run configs/electric-production.yaml \
+  --seed 7 \
+  --set population=300 \
+  --plot
+
+# Generate a report from a saved run.
+ditscover plot results/electric-production
 ```
 
-Precedence is defaults < YAML < `--set` / shortcuts. Exit codes: `0` ok, `1` data or I/O
-error, `2` invalid config, `130` cancelled (the partial result is still written).
+Configuration precedence: `defaults → YAML → --set / shortcuts`.
 
-### Configuration
+Exit codes: `0` success · `1` data or I/O error · `2` invalid configuration · `130` cancelled. Cancellation still writes the partial result.
 
-Every option is documented with its default in
-[`specs/001-ga-motif-discovery/contracts/config.example.yaml`](specs/001-ga-motif-discovery/contracts/config.example.yaml).
-Main groups:
+<details>
+<summary>⚙️ Configuration reference</summary>
 
-| Group | Key fields |
-|---|---|
+Every option and its default is documented in [`config.example.yaml`](specs/001-ga-motif-discovery/contracts/config.example.yaml).
+
+| Group | Main fields |
+|:--|:--|
 | `data` | `path`, `column` (name or index), `delimiter`, `header` |
-| `preprocess` | ordered list of `nan`, `detrend`, `smooth`, `normalize`, `paa` |
+| `preprocess` | Ordered steps: `nan`, `detrend`, `smooth`, `normalize`, `paa` |
 | `motif` | `min_len`, `max_len`, `max_stretch`, `min_occ`, `max_occ`, `min_gap`, `min_std` |
-| `distance` | `kind: zeuclid \| euclid \| dtw`, `band` |
+| `distance` | `kind` (`zeuclid`, `euclid`, or `dtw`), `band` |
 | `ga` | `population`, operator probabilities, `scan_step`, `init_greedy`, `niche_jaccard` |
 | `stop` | `max_generations`, `time_budget_s`, `stagnation_window`, `stagnation_delta` |
 | `output` | `dir`, `top_k`, `dedupe_jaccard`, `snapshot_every` |
 | `log` | `level`, `log_every`, `history`, `channel_capacity` |
 
-### Output
+</details>
 
-A results folder is self-contained:
+<details>
+<summary>📦 Saved runs and reports</summary>
 
-| File | Content |
-|---|---|
-| `results.json` | top-K motifs (occurrences, prototype, aligned occurrences, objectives), Pareto front, stop reason |
-| `history.jsonl` | one line per generation: hypervolume, front size, best and mean objectives, front snapshots |
-| `config.yaml` | effective configuration, including the seed |
-| `series.csv` | original series, so plots work without the source data |
-| `report.html` | optional report with 4 views: motifs on the series, aligned overlay, evolution, Pareto front by generation |
+Each results folder is self-contained.
 
-## Example analyses
+| File | Contents |
+|:--|:--|
+| `results.json` | Top-K motifs, occurrences, prototypes, aligned occurrences, objectives, Pareto front, and stop reason |
+| `history.jsonl` | Per-generation hypervolume, front size, best and mean objectives, and front snapshots |
+| `config.yaml` | Effective configuration, including the seed |
+| `series.csv` | Original series, allowing plots without the source dataset |
+| `report.html` | Optional interactive report |
 
-Both runs use the configs in [`configs/`](configs). The preprocessing is: interpolate missing
-values, remove a linear trend, z-score. Motif lengths range from 9 to 15 months.
+Reports contain four views: motifs on the series, aligned occurrences, optimization history, and the Pareto front by generation.
 
-### US electric production (monthly, 1985–2018, 397 points)
+</details>
 
-[`configs/electric-production.yaml`](configs/electric-production.yaml) (DTW distance, seed 42):
+## 🧠 How it works
+
+Each candidate motif contains `k` non-overlapping segments, represented as `(start, length)`. NSGA-II evolves these candidates using three objectives:
+
+| Objective | Measures | Goal |
+|:--|:--|:--|
+| Support | Number of occurrences, `k` | ↑ Maximize |
+| Cohesion | Mean distance to the prototype after resampling occurrences to a common length | ↓ Minimize |
+| Length | Mean occurrence length | ↑ Maximize |
+
+The result is a Pareto front: competing solutions that expose trade-offs rather than collapsing them into one weighted score.
+
+1. **Initialize:** generate random candidates or seed them with a random window and its best matches.
+2. **Vary:** apply donation crossover and shift, stretch, add, or remove mutations.
+3. **Repair:** keep candidates valid after variation.
+4. **Select:** use NSGA-II and Jaccard-overlap clearing to preserve distinct motifs.
+5. **Stop:** finish on the generation limit, time budget, hypervolume stagnation, or Ctrl+C, returning the best result so far.
+
+Distances: z-normalized Euclidean (default), raw Euclidean, or DTW with a Sakoe–Chiba band.
+
+<details>
+<summary>🏗️ Architecture and design</summary>
+
+![ditscover components and discovery flow](docs/images/architecture.png)
+
+The main discovery path is:
+
+```text
+Researcher → Python API / CLI → PyO3 → discover()
+                                      ↓
+                               Preprocessing
+                                      ↓
+                                NSGA-II engine
+                                      ↓
+                               Result → Saved run
+```
+
+The engine coordinates operators, evaluation, and survival. A separate logger thread receives non-blocking events and streams them to `history.jsonl`.
+
+An [interactive architecture diagram](.archify/architecture-ditscover-overview-20261003-180638/ditscover-overview.html), generated with Archify, links components to their source lines. Open it in a browser.
+
+Design rules are defined in [the project constitution](.specify/memory/constitution.md):
+
+- Algorithm code lives in `crates/core` and is testable without Python.
+- The binding and Python package convert types and delegate execution.
+- YAML, CLI, and Python share one serializable `Config` with consistent field names.
+- Logging uses a bounded channel and never blocks the genetic algorithm; dropped events are counted.
+
+</details>
+
+<details>
+<summary>🗂️ Repository layout</summary>
+
+```text
+.
+├── Cargo.toml                   # Rust workspace
+├── pyproject.toml               # maturin, ruff, pytest
+├── crates/
+│   ├── core/                    # Pure Rust algorithm
+│   │   ├── src/
+│   │   │   ├── lib.rs           # Discovery pipeline
+│   │   │   ├── config.rs        # Defaults, validation, overrides
+│   │   │   ├── io.rs            # Loader trait and CSV loader
+│   │   │   ├── preprocess.rs    # NaN, detrend, smooth, normalize, PAA
+│   │   │   ├── series.rs        # Series, origin map, prefix statistics
+│   │   │   ├── distance.rs      # Resampling, Euclidean, DTW
+│   │   │   ├── motif.rs         # Segments, evaluation, prototypes, Jaccard
+│   │   │   ├── ops.rs           # Initialization, crossover, mutations, repair
+│   │   │   ├── nsga.rs          # Sorting, crowding, clearing, hypervolume
+│   │   │   ├── engine.rs        # Evolution loop, RNG, stopping
+│   │   │   ├── events.rs        # Event channel and logger
+│   │   │   ├── result.rs        # Top-K selection, save/load
+│   │   │   └── synth.rs         # Planted motifs and IoU metrics
+│   │   ├── tests/               # Rust integration and property tests
+│   │   └── benches/ga.rs        # Criterion benchmarks
+│   └── py/                      # PyO3 bindings: ditscover._core
+├── python/ditscover/             # Python API, CLI, Plotly views
+├── tests/python/                # API, CLI, and plot tests
+├── configs/                     # Example YAML configurations
+├── data/                        # Example datasets
+├── results/                     # Saved runs
+├── docs/images/                 # README figures
+├── scripts/bench_check.py        # Benchmark regression check
+├── specs/001-ga-motif-discovery/ # Specification and implementation plan
+└── .archify/                    # Interactive architecture diagram
+```
+
+</details>
+
+## 📊 Example analyses
+
+Both examples interpolate missing values, remove a linear trend, and apply z-score normalization. Motif lengths range from 9 to 15 months.
+
+| Dataset | Series | Distance | Seed | Top motif |
+|:--|:--|:--|:--|:--|
+| US electric production | Monthly · 1985–2018 · 397 points | DTW | `42` | 17 occurrences · about 14 months |
+| Australian beer production | Monthly · 1956–1995 · 476 points | Z-normalized Euclidean | `69` | 22 occurrences · about 13 months |
+
+**⚡ US electric production**
+
+The discovered motifs capture the yearly cycle with winter and summer peaks. The run stopped after 45 generations due to hypervolume stagnation, taking about 0.1 s.
+
+[Configuration](configs/electric-production.yaml) · [Interactive report](results/electric-production/report.html)
 
 ![Top-3 motifs on the electric production series](docs/images/electric-motifs.png)
 
-![Aligned occurrences and prototype for each motif](docs/images/electric-overlay.png)
+<details>
+<summary>View aligned occurrences and prototypes</summary>
 
-The motifs pick up the yearly cycle with its winter and summer peaks. The top motif has 17
-occurrences of about 14 months. The run stopped on hypervolume stagnation after 45 generations
-(about 0.1 s). Full report: [`results/electric-production/report.html`](results/electric-production/report.html).
+![Aligned occurrences and prototypes for electric production](docs/images/electric-overlay.png)
 
-### Australian beer production (monthly, 1956–1995, 476 points)
+</details>
 
-[`configs/monthly-beer-production-in-austr.yaml`](configs/monthly-beer-production-in-austr.yaml)
-(z-normalised Euclidean, seed 69):
+**🍺 Australian beer production**
+
+The top prototype captures an annual rise to a peak followed by a decline. A second motif family contains 11 occurrences of about 15 months and includes a secondary bump.
+
+[Configuration](configs/monthly-beer-production-in-austr.yaml) · [Interactive report](results/monthly-beer-production-in-austr/report.html)
 
 ![Top-3 motifs on the beer production series](docs/images/beer-motifs.png)
 
-![Aligned occurrences and prototype for each motif](docs/images/beer-overlay.png)
+<details>
+<summary>View aligned occurrences and prototypes</summary>
 
-The top motif has 22 occurrences of about 13 months. Its prototype shows the annual rise to a
-peak followed by a decline. A second family of 11 occurrences, about 15 months long, adds a
-secondary bump. Full report:
-[`results/monthly-beer-production-in-austr/report.html`](results/monthly-beer-production-in-austr/report.html).
+![Aligned occurrences and prototypes for beer production](docs/images/beer-overlay.png)
 
-## Development
+</details>
+
+## 🛠️ Development
+
+Run formatting, linting, and tests:
 
 ```bash
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-uv run ruff check && uv run ruff format --check && uv run pytest tests/python
+# Rust
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+
+# Python
+uv run ruff check
+uv run ruff format --check
+uv run pytest tests/python
 ```
 
-- **Tests:**
-  - property tests of the operator invariants (proptest);
-  - determinism with 1 vs 4 threads;
-  - stop criteria and cancellation;
-  - save/load round trip;
-  - an allocation-counting test proving the evaluation hot loop never allocates;
-  - pytest for the API, CLI and plots.
-- **Quality on synthetic data:** `cargo test -p ditscover-core --release planted -- --nocapture`
-  plants 3 motifs × 8 occurrences in 10,000 points and reports recall and precision for 10 seeds.
-- **Benchmarks:** `cargo bench -p ditscover-core --bench ga -- --save-baseline ref` once, then
-  `--baseline ref` and `python scripts/bench_check.py` to fail on any regression above 10 %.
+Tests cover operator invariants with proptest, determinism across 1 and 4 threads, stopping and cancellation, save/load round trips, allocation-free evaluation, and the Python API, CLI, and plots.
 
-Development follows Spec Kit: see [`specs/001-ga-motif-discovery/`](specs/001-ga-motif-discovery)
-for the specification, plan, research decisions and tasks.
+Development follows Spec Kit. See the [specification, plan, research, and tasks](specs/001-ga-motif-discovery/).
 
-## Status and known limitations
+<details>
+<summary>🧪 Synthetic recovery and benchmarks</summary>
 
-| Target | Result on the reference machine (Apple M4) |
-|---|---|
-| Full run, 10⁴ points, 200 × 300 | 0.87 s (target < 30 s) ✅ |
-| Logging overhead | +0.3 % (target < 5 %) ✅ |
-| Same seed, 1 vs N threads | identical results ✅ |
-| Thread scaling, 8 vs 1 | 2.9× (target ≥ 5×) ❌ |
-| Planted-motif recovery (SC-001) | median recall 0.54, precision 0.19 (target 0.9 / 0.8) ❌ |
+Evaluate recovery across 10 seeds, using 3 planted motifs with 8 occurrences each in a 10,000-point series:
 
-Planted-motif recovery is the open problem. Maximising support rewards padding a real motif with
-background windows up to `max_occ`, so the top-K list prefers padded motifs over the clean ones.
-Fixing it requires a change to the objectives or to the top-K selection. Until then, set
-`max_occ` close to the number of repetitions you expect, and inspect the Pareto front
-(`res.front`), not only `res.motifs`.
+```bash
+cargo test -p ditscover-core --release planted -- --nocapture
+```
+
+Create a benchmark baseline, compare subsequent runs, and check for regressions above 10%:
+
+```bash
+cargo bench -p ditscover-core --bench ga -- --save-baseline ref
+cargo bench -p ditscover-core --bench ga -- --baseline ref
+python scripts/bench_check.py
+```
+
+</details>
+
+**Reference results and limitations**
+
+Results below were measured on Apple M4.
+
+| Check | Result | Target | Status |
+|:--|:--|:--|:--|
+| Full run: 10,000 points, 200 individuals, 300 generations | 0.87 s | < 30 s | ✅ Met |
+| Logging overhead | +0.3% | < 5% | ✅ Met |
+| Determinism: 1 vs N threads | Identical results | Identical results | ✅ Met |
+| Thread scaling: 8 vs 1 | 2.9× | ≥ 5× | ❌ Not met |
+| Planted-motif recovery (SC-001) | Median recall 0.54; precision 0.19 | Recall 0.9; precision 0.8 | ❌ Not met |
+
+> ⚠️ **Recovery:** maximizing support can reward padding real motifs with background windows up to `max_occ`. As a result, top-K selection can favor padded motifs over clean ones.
+
+Resolving this requires changes to the objectives or top-K selection. For now, set `max_occ` close to the expected number of repetitions and inspect `res.front`, not only `res.motifs`.
