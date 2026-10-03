@@ -42,7 +42,7 @@ output:
   dedupe_jaccard: 0.3
   snapshot_every: 10
 log:
-  level: info
+  level: error
   log_every: 10
   history: true
   channel_capacity: 1024

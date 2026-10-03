@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "command": "deliver",
+  "status": "pending",
+  "receiptId": "ec66e804-3efc-47ed-9e8a-30d6e54ae5f4",
+  "input": "/Users/more/Desktop/projects/ditscover/.archify/architecture-ditscover-overview-20261003-180638/.archify/architecture-ditscover-overview-20261003-180638/candidate.json",
+  "output": "/Users/more/Desktop/projects/ditscover/.archify/architecture-ditscover-overview-20261003-180638/.archify/architecture-ditscover-overview-20261003-180638/ditscover-overview.html"
+}

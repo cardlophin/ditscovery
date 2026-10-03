@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "dd07c689-bcf0-48d7-8de2-f74a07d65746",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/more/Desktop/projects/ditscover/.archify/architecture-ditscover-overview-20261003-180638/candidate.json",
+  "output": "/Users/more/Desktop/projects/ditscover/.archify/architecture-ditscover-overview-20261003-180638/ditscover-overview.html",
+  "specification": {
+    "sha256": "0ea891ba058b3ab3bb141e31637f9b740d19e16452f37aa1fbb5d8dea7bc8240",
+    "bytes": 9112
+  },
+  "artifact": {
+    "sha256": "6e25de02a41d8c41ae24880f1eb958a4ccc7ca8267202122381d34b2aeb0f751",
+    "bytes": 793573
+  }
+}

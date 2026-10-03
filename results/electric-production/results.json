@@ -26,7 +26,7 @@
     "log": {
       "channel_capacity": 1024,
       "history": true,
-      "level": "info",
+      "level": "error",
       "log_every": 10
     },
     "motif": {
@@ -64,7 +64,7 @@
     }
   },
   "dropped_events": 0,
-  "elapsed_s": 0.066419459,
+  "elapsed_s": 0.120508416,
   "front": [
     {
       "aligned": null,
