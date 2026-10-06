@@ -1,0 +1,24 @@
+datasets:
+  - synthetic: {name: synth-varlen, n_series: 20, n: 5000, lens: [40, 60, 80], occ: 6, stretch: 0.3, noise: 0.1, seed: 0}
+  - tsmd: {name: ECG5000, split: test, n_series: 20}
+  - tsmd: {name: Symbols, split: test, n_series: 20}
+  - yfinance: {name: indices-weekly, tickers: ["^GSPC", "^IBEX", "BTC-USD"], start: "2015-01-01", end: "2025-01-01", interval: 1wk, min_len: 8, max_len: 26, k: 5}   # cost only
+
+methods:
+  - method: ditscover
+    params: {population: 200, max_generations: 300, stagnation_window: 30}
+  - method: locomotif
+    params: {rho: 0.8, warping: true, overlap: 0.0}
+  - method: stomp
+    params: {lengths: null, max_matches: 20}     # null = midpoint of [min_len, max_len]
+
+seeds: [0, 1, 2]
+k: oracle
+timeout_s: 600
+threads: null
+jobs: 1
+eval: {average: micro, off_target: ignore}
+
+scaling:
+  lengths: [1000, 2000, 5000, 10000, 20000]
+  repeats: 3

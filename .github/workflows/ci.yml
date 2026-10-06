@@ -27,8 +27,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - run: uv venv && uv pip install -e '.[dev]'
+      - run: uv venv && uv pip install -e '.[dev,bench,finance]'
+      - run: uv pip install 'git+https://github.com/ML-KULeuven/tsmd-evaluation'
       - run: uv run maturin develop --release
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run pytest tests/python
+      - name: smoke benchmark (2 series, 1 seed, no scaling)
+        run: uv run ditscover bench tests/bench-smoke.yaml --out smoke-bench --plot

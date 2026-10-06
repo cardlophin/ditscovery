@@ -127,6 +127,52 @@ fn base_dict_and_yaml_roundtrip() {
 }
 
 #[test]
+fn market_data_fields_and_validation() {
+    let d = Config::default().data;
+    assert_eq!((d.ticker, d.start, d.end, d.period), (None, None, None, None));
+    assert_eq!((d.interval.as_str(), d.field.as_str(), d.refresh), ("1d", "Close", false));
+    assert_eq!(d.time_column, None);
+    let ok = |pairs: &[(&str, Value)]| {
+        let mut all = base();
+        all.extend(ov(pairs));
+        Config::build(None, None, &all)
+    };
+    let c = ok(&[("ticker", json!("AAPL")), ("interval", json!("1wk")), ("period", json!("5y"))]);
+    let c = c.unwrap();
+    assert_eq!((c.data.ticker.as_deref(), c.data.interval.as_str()), (Some("AAPL"), "1wk"));
+    for (pairs, key) in [
+        (vec![("ticker", json!("A")), ("path", json!("x.csv"))], "data.ticker"),
+        (
+            vec![("ticker", json!("A")), ("period", json!("1y")), ("start", json!("2020-01-01"))],
+            "data.period",
+        ),
+        (vec![("ticker", json!("A")), ("interval", json!("2d"))], "data.interval"),
+        (vec![("ticker", json!("A")), ("start", json!("2020-13-01"))], "data.start"),
+        (
+            vec![
+                ("ticker", json!("A")),
+                ("start", json!("2020-01-01")),
+                ("end", json!("01/02/2020")),
+            ],
+            "data.end",
+        ),
+        (vec![("ticker", json!("A")), ("period", json!("7y"))], "data.period"),
+    ] {
+        let e = ok(&pairs).unwrap_err().to_string();
+        assert!(e.contains(key), "{key}: {e}");
+    }
+}
+
+#[test]
+fn ticker_without_values_points_to_python() {
+    let mut o = base();
+    o.push(("ticker".into(), json!("AAPL")));
+    let c = Config::build(None, None, &o).unwrap();
+    let e = ditscover_core::load_data(&c).unwrap_err().to_string();
+    assert!(e.contains("ditscover[finance]"), "{e}");
+}
+
+#[test]
 fn series_length_check() {
     let c = Config::build(None, None, &base()).unwrap();
     let e = validate_len(19, &c).unwrap_err().to_string();

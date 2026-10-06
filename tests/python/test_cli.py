@@ -1,4 +1,5 @@
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -100,6 +101,71 @@ def test_verbose_shows_each_generation(setup):
     r = cli("run", cfg, "-v", "--set", "max_generations=3", "--out", tmp / "o")
     assert r.returncode == 0
     assert all(f"gen {g} " in r.stderr for g in range(4)), r.stderr
+
+
+BENCH = (
+    "datasets: [{synthetic: {name: syn, n_series: 1, n: 1500, lens: [40], occ: 4}}]\n"
+    "methods: [{method: ditscover, params: {population: 20, max_generations: 5}}]\n"
+    "seeds: [0]\n"
+)
+
+
+def test_bench_smoke_run(tmp_path):
+    cfg = tmp_path / "bench.yaml"
+    cfg.write_text(BENCH)
+    out = tmp_path / "b"
+    r = cli("bench", cfg, "--out", out)
+    assert r.returncode == 0, r.stderr
+    for f in ["runs.csv", "summary.json", "bench.yaml"]:
+        assert (out / f).exists(), f
+    assert "ditscover" in r.stdout and "syn" in r.stdout
+    assert "[1/1] ditscover syn#0 seed=0 ok F1=" in r.stderr
+    assert "population: 20" in (out / "bench.yaml").read_text()
+
+
+def test_bench_invalid_config_exits_2(tmp_path):
+    cfg = tmp_path / "bench.yaml"
+    cfg.write_text("datasets: []\nmethods: [{method: ditscover}]\n")
+    r = cli("bench", cfg, "--out", tmp_path / "b")
+    assert r.returncode == 2 and "datasets" in r.stderr
+    cfg.write_text(BENCH)
+    r = cli("bench", cfg, "--set", "nope=1", "--out", tmp_path / "b")
+    assert r.returncode == 2 and "nope" in r.stderr
+
+
+def test_bench_missing_extra_exits_1(tmp_path):
+    broken = tmp_path / "site" / "locomotif"
+    broken.mkdir(parents=True)
+    (broken / "__init__.py").write_text("raise ImportError('not installed')\n")
+    cfg = tmp_path / "bench.yaml"
+    cfg.write_text(BENCH.split("methods")[0] + "methods: [{method: locomotif}]\n")
+    env = {**os.environ, "PYTHONPATH": str(tmp_path / "site")}
+    r = cli("bench", cfg, "--out", tmp_path / "b", env=env)
+    assert r.returncode == 1 and "ditscover[bench]" in r.stderr
+
+
+FAKE_YFINANCE = """
+import numpy as np, pandas as pd
+def download(ticker, start=None, end=None, period=None, interval="1d", **kw):
+    idx = pd.bdate_range("2024-01-01", periods=300)
+    close = 100 + np.cumsum(np.sin(np.arange(300) / 5))
+    return pd.DataFrame({"Close": close}, index=idx)
+"""
+
+
+def test_ticker_shortcuts(tmp_path):
+    (tmp_path / "site").mkdir()
+    (tmp_path / "site" / "yfinance.py").write_text(FAKE_YFINANCE)
+    env = {**os.environ, "PYTHONPATH": str(tmp_path / "site"), "DITSCOVER_CACHE": str(tmp_path)}
+    args = ["--set", "min_len=10", "--set", "max_len=30", "--set", "max_generations=5"]
+    out = tmp_path / "o"
+    r = cli("run", "--ticker", "AAPL", "--start", "2024-01-01", "--end", "2025-03-01", *args,
+            "--out", out, env=env)  # fmt: skip
+    assert r.returncode == 0, r.stderr
+    assert "ticker: AAPL" in (out / "config.yaml").read_text()
+    assert (out / "series.csv").read_text().startswith("timestamp,value\n2024-01-01,")
+    r = cli("run", "--data", "x.csv", "--ticker", "AAPL", *args, env=env)
+    assert r.returncode == 2
 
 
 def test_quiet_and_load_without_source(setup):

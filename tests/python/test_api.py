@@ -1,4 +1,5 @@
 import _thread
+import json
 import threading
 import time
 from itertools import combinations
@@ -97,6 +98,18 @@ def test_preprocessing_reports_original_indices():
 
     hits = [p for p in planted[0] if any(iou(f, p) >= 0.5 for f in found)]
     assert len(hits) >= 4, (res.motifs[0].occurrences, planted[0])
+
+
+def test_ground_truth_metrics_are_saved_and_loaded(tmp_path):
+    x, sets = ds._core.synthetic(3000, [30], 6, 0.2, 0.1, 1)
+    gt = tmp_path / "gt.json"
+    gt.write_text(json.dumps({"series": x, "sets": sets}))
+    res = ds.discover(np.asarray(x), ground_truth=gt, **FAST)
+    assert res.metrics["tp"] + res.metrics["fn"] == 6
+    assert 0.0 <= res.metrics["f1"] <= 1.0
+    res.save(tmp_path / "run")
+    assert ds.load(tmp_path / "run").metrics == res.metrics
+    assert ds.discover(np.asarray(x), **FAST).metrics is None
 
 
 def test_ctrl_c_returns_partial_result(series):

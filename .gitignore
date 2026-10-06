@@ -16,3 +16,6 @@ dist/
 .pytest_cache/
 .ruff_cache/
 ditscover-out/
+ditscover-bench/
+results/bench-*/report.html
+results/bench-*/datasets/

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import plotly.graph_objects as go
 from plotly.colors import qualitative
@@ -12,15 +10,35 @@ def color(i):
     return PALETTE[i % len(PALETTE)]
 
 
+def label(res, i):
+    return res.timestamps[i] if res.timestamps else i
+
+
+# Dated series keep an index axis (gaps such as weekends are not stretched) labelled with dates.
+def _dates(fig, res, ticks=8):
+    ts = res.timestamps
+    if not ts:
+        return fig.update_layout(xaxis_title="index")
+    at = np.unique(np.linspace(0, len(ts) - 1, ticks).round().astype(int)).tolist()
+    fig.update_traces(hovertemplate="%{text}<br>%{y:.4g}<extra>%{fullData.name}</extra>")
+    return fig.update_xaxes(tickmode="array", tickvals=at, ticktext=[ts[i] for i in at])
+
+
 def motifs(res):
-    fig = go.Figure(go.Scatter(y=res.series, mode="lines", name="series", line_color="#b0b0b0"))
+    ts = res.timestamps
+    fig = go.Figure(
+        go.Scatter(y=res.series, text=ts, mode="lines", name="series", line_color="#b0b0b0")
+    )
     for i, m in enumerate(res.motifs):
         xs, ys = [], []
         for s, n in m.occurrences:
             xs += [*range(s, s + n), None]
             ys += [*res.series[s : s + n], None]
-        fig.add_scatter(x=xs, y=ys, mode="lines", name=f"motif {i + 1}", line=dict(color=color(i)))
-    return fig.update_layout(title="Series and motif occurrences", xaxis_title="index")
+        text = [None if x is None else ts[x] for x in xs] if ts else None
+        fig.add_scatter(
+            x=xs, y=ys, text=text, mode="lines", name=f"motif {i + 1}", line=dict(color=color(i))
+        )
+    return _dates(fig.update_layout(title="Series and motif occurrences"), res)
 
 
 def overlay(res):
@@ -110,15 +128,70 @@ def plotlyjs(cdn):
     return "cdn" if cdn else True
 
 
-def report(res, path=None, cdn=False):
-    parts = [
-        view(res).to_html(full_html=False, include_plotlyjs=plotlyjs(cdn) if i == 0 else False)
-        for i, view in enumerate(VIEWS.values())
-    ]
-    html = (
-        "<!doctype html><html><head><meta charset='utf-8'><title>ditscover report</title></head>"
-        f"<body>{''.join(parts)}</body></html>"
+def method_colors(summary):
+    labels = dict.fromkeys(r["label"] for r in summary["by_method_dataset"])
+    return {label: color(i) for i, label in enumerate(labels)}
+
+
+def _bars(fig, rows, key, colors, row, legend):
+    for label, c in colors.items():
+        rs = [r for r in rows if r["label"] == label]
+        fig.add_bar(
+            x=[r["dataset"] for r in rs],
+            y=[r[f"{key}_mean"] for r in rs],
+            error_y=dict(array=[r[f"{key}_std"] for r in rs]),
+            name=label,
+            marker_color=c,
+            legendgroup=label,
+            showlegend=legend,
+            row=row,
+            col=1,
+        )
+
+
+def quality(summary):
+    rows = [r for r in summary["by_method_dataset"] if r["f1_mean"] is not None]
+    keys = ("precision", "recall", "f1")
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True, subplot_titles=["precision", "recall", "F1"]
     )
-    if path is not None:
-        Path(path).write_text(html, encoding="utf-8")
-    return html
+    for i, k in enumerate(keys):
+        _bars(fig, rows, k, method_colors(summary), i + 1, i == 0)
+    fig.update_yaxes(range=[0, 1.05])
+    title = "Quality per dataset (mean ± std, failed runs count as 0)"
+    return fig.update_layout(title=title, barmode="group", height=800)
+
+
+def cost(summary):
+    rows = summary["by_method_dataset"]
+    titles = ["time per run (s)", "memory above baseline (MB)"]
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=titles)
+    for i, k in enumerate(("time_s", "delta_mb")):
+        _bars(fig, rows, k, method_colors(summary), i + 1, i == 0)
+    fig.update_yaxes(type="log", row=1, col=1)
+    return fig.update_layout(
+        title="Cost per dataset (successful runs)", barmode="group", height=700
+    )
+
+
+def scaling(summary):
+    titles = ["time (s)", "memory above baseline (MB)"]
+    fig = make_subplots(rows=1, cols=2, subplot_titles=titles)
+    for label, c in method_colors(summary).items():
+        rs = sorted((r for r in summary["scaling"] if r["label"] == label), key=lambda r: r["n"])
+        for col, k in enumerate(("time_s", "delta_mb"), 1):
+            fig.add_scatter(
+                x=[r["n"] for r in rs],
+                y=[r[k] for r in rs],
+                mode="lines+markers",
+                name=label,
+                line_color=c,
+                marker_color=c,
+                legendgroup=label,
+                showlegend=col == 1,
+                row=1,
+                col=col,
+            )
+    fig.update_xaxes(type="log", title_text="series length")
+    fig.update_yaxes(type="log")
+    return fig.update_layout(title="Scaling with series length (median over repeats)")

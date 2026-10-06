@@ -1,0 +1,15 @@
+seed: 42
+data:
+  ticker: "^GSPC"          # S&P 500; any Yahoo Finance symbol (AAPL, EURUSD=X, BTC-USD, ^IBEX ...)
+  start: "2015-01-01"
+  end: "2025-01-01"        # null = today, fixed at first download
+  interval: 1wk            # 1m..1h (recent only), 1d, 5d, 1wk, 1mo, 3mo
+  field: Close             # adjusted close
+  refresh: false
+preprocess:
+  - nan: interpolate
+  - normalize: zscore
+motif: {min_len: 8, max_len: 26, max_stretch: 1.5, min_occ: 2, max_occ: 15}
+distance: {kind: zeuclid}
+stop: {max_generations: 300, stagnation_window: 40}
+output: {dir: results/sp500-weekly, top_k: 5}

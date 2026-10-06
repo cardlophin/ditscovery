@@ -1,4 +1,6 @@
+use crate::bench::INTERVALS;
 use crate::distance::Distance;
+use crate::metrics::{Average, OffTarget};
 use crate::preprocess::Step;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -47,6 +49,15 @@ pub struct Config {
     pub stop: Stop,
     pub output: Output,
     pub log: Log,
+    pub eval: Eval,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Eval {
+    pub ground_truth: Option<PathBuf>,
+    pub average: Average,
+    pub off_target: OffTarget,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -56,7 +67,18 @@ pub struct Data {
     pub column: Column,
     pub delimiter: char,
     pub header: bool,
+    pub time_column: Option<Column>,
+    pub ticker: Option<String>,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub period: Option<String>,
+    pub interval: String,
+    pub field: String,
+    pub refresh: bool,
 }
+
+pub const PERIODS: [&str; 11] =
+    ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -122,7 +144,20 @@ pub struct Log {
 
 impl Default for Data {
     fn default() -> Self {
-        Self { path: None, column: Column::Index(0), delimiter: ',', header: true }
+        Self {
+            path: None,
+            column: Column::Index(0),
+            delimiter: ',',
+            header: true,
+            time_column: None,
+            ticker: None,
+            start: None,
+            end: None,
+            period: None,
+            interval: "1d".into(),
+            field: "Close".into(),
+            refresh: false,
+        }
     }
 }
 
@@ -230,7 +265,27 @@ impl Config {
     pub fn validate(&self) -> Result<(), Error> {
         self.validate_motif()?;
         self.validate_ga()?;
+        self.validate_data()?;
         self.validate_rest()
+    }
+
+    fn validate_data(&self) -> Result<(), Error> {
+        let d = &self.data;
+        let both = d.ticker.is_some() && d.path.is_some();
+        check(!both, "data.ticker", "give data.path or data.ticker, not both")?;
+        check(
+            d.period.is_none() || d.start.is_none(),
+            "data.period",
+            "give period or start, not both",
+        )?;
+        let period = d.period.as_deref().is_none_or(|p| PERIODS.contains(&p));
+        check(period, "data.period", &format!("must be one of {}", PERIODS.join("|")))?;
+        let interval = INTERVALS.contains(&d.interval.as_str());
+        check(interval, "data.interval", &format!("must be one of {}", INTERVALS.join("|")))?;
+        for (v, key) in [(&d.start, "data.start"), (&d.end, "data.end")] {
+            check(v.as_deref().is_none_or(is_date), key, "must be a YYYY-MM-DD date")?;
+        }
+        Ok(())
     }
 
     fn validate_motif(&self) -> Result<(), Error> {
@@ -303,6 +358,16 @@ fn check(ok: bool, path: &str, msg: &str) -> Result<(), Error> {
 
 fn unit(v: f64) -> bool {
     (0.0..=1.0).contains(&v)
+}
+
+pub fn is_date(s: &str) -> bool {
+    let p: Vec<&str> = s.split('-').collect();
+    let num = |x: &str, n: usize| x.len() == n && x.bytes().all(|b| b.is_ascii_digit());
+    if p.len() != 3 || !num(p[0], 4) || !num(p[1], 2) || !num(p[2], 2) {
+        return false;
+    }
+    let (m, d): (u32, u32) = (p[1].parse().unwrap_or(0), p[2].parse().unwrap_or(0));
+    (1..=12).contains(&m) && (1..=31).contains(&d)
 }
 
 pub fn validate_step(i: usize, step: &Step, n: usize) -> Result<(), Error> {

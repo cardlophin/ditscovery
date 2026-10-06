@@ -1,10 +1,11 @@
 use crate::config::{Column, Config, Error};
 use crate::events::{Event, GenerationRecord, write_line};
 use crate::io::{CsvLoader, Loader};
+use crate::metrics::Prom;
 use crate::motif::{Ctx, Individual, align, jaccard};
 use crate::series::Series;
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +43,10 @@ pub struct RunResult {
     pub version: String,
     #[serde(default)]
     pub series: Vec<f64>,
+    #[serde(default)]
+    pub metrics: Option<Prom>,
+    #[serde(default)]
+    pub timestamps: Option<Vec<String>>,
 }
 
 fn io_err(path: &Path) -> impl Fn(std::io::Error) -> Error + '_ {
@@ -57,6 +62,7 @@ impl RunResult {
         let obj = json.as_object_mut().expect("result is an object");
         obj.remove("history");
         obj.remove("series");
+        obj.remove("timestamps");
         let path = dir.join("results.json");
         let text = serde_json::to_string_pretty(&json).expect("json serialises");
         std::fs::write(&path, text).map_err(io_err(&path))?;
@@ -64,8 +70,14 @@ impl RunResult {
         std::fs::write(&path, self.config.to_yaml()).map_err(io_err(&path))?;
         self.write_history(&dir.join("history.jsonl"))?;
         let path = dir.join("series.csv");
-        let mut out = String::from("value\n");
-        self.series.iter().for_each(|v| out += &format!("{v}\n"));
+        let out: String = match &self.timestamps {
+            Some(ts) => std::iter::once("timestamp,value\n".to_string())
+                .chain(ts.iter().zip(&self.series).map(|(t, v)| format!("{t},{v}\n")))
+                .collect(),
+            None => std::iter::once("value\n".to_string())
+                .chain(self.series.iter().map(|v| format!("{v}\n")))
+                .collect(),
+        };
         std::fs::write(&path, out).map_err(io_err(&path))
     }
 
@@ -94,8 +106,15 @@ impl RunResult {
                 res.history.push(r);
             }
         }
-        res.series =
-            CsvLoader::new(dir.join("series.csv")).column(Column::Name("value".into())).load()?;
+        let path = dir.join("series.csv");
+        let csv = CsvLoader::new(&path).column(Column::Name("value".into()));
+        res.series = csv.load()?;
+        let mut head = String::new();
+        let file = std::fs::File::open(&path).map_err(io_err(&path))?;
+        std::io::BufReader::new(file).read_line(&mut head).map_err(io_err(&path))?;
+        if head.starts_with("timestamp,") {
+            res.timestamps = Some(csv.text(&Column::Name("timestamp".into()))?);
+        }
         Ok(res)
     }
 }

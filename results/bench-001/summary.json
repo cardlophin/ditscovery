@@ -1,0 +1,466 @@
+{
+  "by_method_dataset": [
+    {
+      "label": "ditscover",
+      "dataset": "synth-varlen",
+      "n_runs": 60,
+      "failures": 0,
+      "precision_mean": 0.15341496544159172,
+      "precision_std": 0.03970542175355483,
+      "recall_mean": 0.38796296296296295,
+      "recall_std": 0.09622051438894158,
+      "f1_mean": 0.2192071940222861,
+      "f1_std": 0.05469137189808426,
+      "time_s_mean": 0.709872410433339,
+      "time_s_std": 0.1567263737285141,
+      "peak_mb_mean": 46.01588541666667,
+      "peak_mb_std": 0.15946096018767725,
+      "delta_mb_mean": 1.2231770833333333,
+      "delta_mb_std": 0.16087157884182257,
+      "n_sets_mean": 3.0,
+      "n_sets_std": 0.0
+    },
+    {
+      "label": "locomotif",
+      "dataset": "synth-varlen",
+      "n_runs": 20,
+      "failures": 0,
+      "precision_mean": 0.0,
+      "precision_std": 0.0,
+      "recall_mean": 0.0,
+      "recall_std": 0.0,
+      "f1_mean": 0.0,
+      "f1_std": 0.0,
+      "time_s_mean": 2.1711226208500194,
+      "time_s_std": 0.06527792408423076,
+      "peak_mb_mean": 925.89765625,
+      "peak_mb_std": 11.348679146702246,
+      "delta_mb_mean": 631.48359375,
+      "delta_mb_std": 11.276596707375024,
+      "n_sets_mean": 3.0,
+      "n_sets_std": 0.0
+    },
+    {
+      "label": "stomp",
+      "dataset": "synth-varlen",
+      "n_runs": 20,
+      "failures": 0,
+      "precision_mean": 0.5869835573782942,
+      "precision_std": 0.08439490933014365,
+      "recall_mean": 0.3194444444444444,
+      "recall_std": 0.024681203239962167,
+      "f1_mean": 0.4105051584361929,
+      "f1_std": 0.031197764368726216,
+      "time_s_mean": 0.03761733324990928,
+      "time_s_std": 0.00778103900961866,
+      "peak_mb_mean": 191.38515625,
+      "peak_mb_std": 0.32850756989545676,
+      "delta_mb_mean": 0.53359375,
+      "delta_mb_std": 0.11281878718447702,
+      "n_sets_mean": 1.0,
+      "n_sets_std": 0.0
+    },
+    {
+      "label": "ditscover",
+      "dataset": "ECG5000",
+      "n_runs": 60,
+      "failures": 0,
+      "precision_mean": 0.42769179894179893,
+      "precision_std": 0.3632913712447672,
+      "recall_mean": 0.37416666666666665,
+      "recall_std": 0.28396282680247026,
+      "f1_mean": 0.381979316979317,
+      "f1_std": 0.2900026717907003,
+      "time_s_mean": 0.11741431596669827,
+      "time_s_std": 0.043031895388922964,
+      "peak_mb_mean": 44.45703125,
+      "peak_mb_std": 0.12741395947197573,
+      "delta_mb_mean": 0.0,
+      "delta_mb_std": 0.0,
+      "n_sets_mean": 1.5,
+      "n_sets_std": 0.5042194840896107
+    },
+    {
+      "label": "locomotif",
+      "dataset": "ECG5000",
+      "n_runs": 20,
+      "failures": 0,
+      "precision_mean": 0.5916666666666667,
+      "precision_std": 0.3524143958931708,
+      "recall_mean": 0.3625,
+      "recall_std": 0.21635436331702623,
+      "f1_mean": 0.4375,
+      "f1_std": 0.24984538256177458,
+      "time_s_mean": 0.48977487490005844,
+      "time_s_std": 0.14894110453213966,
+      "peak_mb_mean": 320.5046875,
+      "peak_mb_std": 10.242465665007067,
+      "delta_mb_mean": 29.2546875,
+      "delta_mb_std": 10.1971104925466,
+      "n_sets_mean": 1.1,
+      "n_sets_std": 0.5525062514530825
+    },
+    {
+      "label": "stomp",
+      "dataset": "ECG5000",
+      "n_runs": 20,
+      "failures": 0,
+      "precision_mean": 0.5382142857142858,
+      "precision_std": 0.28436762315855746,
+      "recall_mean": 0.545,
+      "recall_std": 0.3140985430352107,
+      "f1_mean": 0.5382864357864359,
+      "f1_std": 0.2935528305551072,
+      "time_s_mean": 0.013011827049922431,
+      "time_s_std": 0.0009781219968070913,
+      "peak_mb_mean": 190.771875,
+      "peak_mb_std": 0.2508927317180539,
+      "delta_mb_mean": 0.0,
+      "delta_mb_std": 0.0,
+      "n_sets_mean": 1.0,
+      "n_sets_std": 0.0
+    },
+    {
+      "label": "ditscover",
+      "dataset": "Symbols",
+      "n_runs": 60,
+      "failures": 0,
+      "precision_mean": 0.5497174122174122,
+      "precision_std": 0.3169697723940488,
+      "recall_mean": 0.5466666666666666,
+      "recall_std": 0.2703279726665858,
+      "f1_mean": 0.5309993247493248,
+      "f1_std": 0.2657675656876592,
+      "time_s_mean": 0.24561338330001187,
+      "time_s_std": 0.09055024003168297,
+      "peak_mb_mean": 44.89895833333333,
+      "peak_mb_std": 0.10704102766279547,
+      "delta_mb_mean": 0.009635416666666667,
+      "delta_mb_std": 0.028346536082461536,
+      "n_sets_mean": 1.7,
+      "n_sets_std": 0.4621247905424446
+    },
+    {
+      "label": "locomotif",
+      "dataset": "Symbols",
+      "n_runs": 20,
+      "failures": 0,
+      "precision_mean": 0.7150595238095238,
+      "precision_std": 0.1858372588649334,
+      "recall_mean": 0.8633333333333333,
+      "recall_std": 0.20229675382513465,
+      "f1_mean": 0.7748151848151849,
+      "f1_std": 0.17548915615995106,
+      "time_s_mean": 1.1810653520498817,
+      "time_s_std": 0.16877165982743508,
+      "peak_mb_mean": 674.1625,
+      "peak_mb_std": 72.03929741551975,
+      "delta_mb_mean": 318.77265625,
+      "delta_mb_std": 71.77192596251139,
+      "n_sets_mean": 1.6,
+      "n_sets_std": 0.5026246899500346
+    },
+    {
+      "label": "stomp",
+      "dataset": "Symbols",
+      "n_runs": 20,
+      "failures": 0,
+      "precision_mean": 0.6303571428571428,
+      "precision_std": 0.3400784389978315,
+      "recall_mean": 0.47833333333333333,
+      "recall_std": 0.2886295507113914,
+      "f1_mean": 0.5382750582750582,
+      "f1_std": 0.3017342531363841,
+      "time_s_mean": 0.03351851044999421,
+      "time_s_std": 0.0036872813641560544,
+      "peak_mb_mean": 191.4515625,
+      "peak_mb_std": 0.4315829902430183,
+      "delta_mb_mean": 0.0,
+      "delta_mb_std": 0.0,
+      "n_sets_mean": 1.0,
+      "n_sets_std": 0.0
+    },
+    {
+      "label": "ditscover",
+      "dataset": "indices-weekly",
+      "n_runs": 9,
+      "failures": 0,
+      "precision_mean": null,
+      "precision_std": null,
+      "recall_mean": null,
+      "recall_std": null,
+      "f1_mean": null,
+      "f1_std": null,
+      "time_s_mean": 0.16087035655558188,
+      "time_s_std": 0.03813041275361137,
+      "peak_mb_mean": 44.717013888888886,
+      "peak_mb_std": 0.11088369195856129,
+      "delta_mb_mean": 0.2725694444444444,
+      "delta_mb_std": 0.08979656067482639,
+      "n_sets_mean": 5.0,
+      "n_sets_std": 0.0
+    },
+    {
+      "label": "locomotif",
+      "dataset": "indices-weekly",
+      "n_runs": 3,
+      "failures": 0,
+      "precision_mean": null,
+      "precision_std": null,
+      "recall_mean": null,
+      "recall_std": null,
+      "f1_mean": null,
+      "f1_std": null,
+      "time_s_mean": 0.018073347000305755,
+      "time_s_std": 0.0014463179882016205,
+      "peak_mb_mean": 294.1354166666667,
+      "peak_mb_std": 1.1187252674174895,
+      "delta_mb_mean": 2.8489583333333335,
+      "delta_mb_std": 0.31612481053111496,
+      "n_sets_mean": 5.0,
+      "n_sets_std": 0.0
+    },
+    {
+      "label": "stomp",
+      "dataset": "indices-weekly",
+      "n_runs": 3,
+      "failures": 0,
+      "precision_mean": null,
+      "precision_std": null,
+      "recall_mean": null,
+      "recall_std": null,
+      "f1_mean": null,
+      "f1_std": null,
+      "time_s_mean": 0.010810972333274549,
+      "time_s_std": 8.535662000190199e-05,
+      "peak_mb_mean": 190.578125,
+      "peak_mb_std": 0.32287466124643477,
+      "delta_mb_mean": 0.0,
+      "delta_mb_std": 0.0,
+      "n_sets_mean": 0.3333333333333333,
+      "n_sets_std": 0.5773502691896257
+    }
+  ],
+  "rank": {
+    "ditscover": {
+      "synth-varlen": 2.0,
+      "ECG5000": 2.25,
+      "Symbols": 2.55,
+      "overall": 2.2666666666666666
+    },
+    "locomotif": {
+      "synth-varlen": 3.0,
+      "ECG5000": 2.05,
+      "Symbols": 1.4,
+      "overall": 2.15
+    },
+    "stomp": {
+      "synth-varlen": 1.0,
+      "ECG5000": 1.7,
+      "Symbols": 2.05,
+      "overall": 1.5833333333333333
+    }
+  },
+  "best": "stomp",
+  "scaling": [
+    {
+      "label": "ditscover",
+      "n": 1000,
+      "time_s": 0.13118766699972184,
+      "delta_mb": 0.046875
+    },
+    {
+      "label": "locomotif",
+      "n": 1000,
+      "time_s": 0.0632926670004963,
+      "delta_mb": 20.9375
+    },
+    {
+      "label": "stomp",
+      "n": 1000,
+      "time_s": 0.011937458999454975,
+      "delta_mb": 0.0
+    },
+    {
+      "label": "ditscover",
+      "n": 2000,
+      "time_s": 0.38976083300076425,
+      "delta_mb": 0.484375
+    },
+    {
+      "label": "locomotif",
+      "n": 2000,
+      "time_s": 0.27777187500032596,
+      "delta_mb": 97.078125
+    },
+    {
+      "label": "stomp",
+      "n": 2000,
+      "time_s": 0.016718875000151456,
+      "delta_mb": 0.0
+    },
+    {
+      "label": "ditscover",
+      "n": 5000,
+      "time_s": 0.5292227079999066,
+      "delta_mb": 0.96875
+    },
+    {
+      "label": "locomotif",
+      "n": 5000,
+      "time_s": 2.149491332999787,
+      "delta_mb": 630.734375
+    },
+    {
+      "label": "stomp",
+      "n": 5000,
+      "time_s": 0.03419466699961049,
+      "delta_mb": 0.5625
+    },
+    {
+      "label": "ditscover",
+      "n": 10000,
+      "time_s": 0.8686553749994346,
+      "delta_mb": 2.84375
+    },
+    {
+      "label": "locomotif",
+      "n": 10000,
+      "time_s": 10.457990290999987,
+      "delta_mb": 2277.96875
+    },
+    {
+      "label": "stomp",
+      "n": 10000,
+      "time_s": 0.07545904200014775,
+      "delta_mb": 4.09375
+    },
+    {
+      "label": "ditscover",
+      "n": 20000,
+      "time_s": 1.2458609169998454,
+      "delta_mb": 6.6875
+    },
+    {
+      "label": "locomotif",
+      "n": 20000,
+      "time_s": 51.99603445899993,
+      "delta_mb": 4136.515625
+    },
+    {
+      "label": "stomp",
+      "n": 20000,
+      "time_s": 0.2043190840004172,
+      "delta_mb": 12.15625
+    }
+  ],
+  "versions": {
+    "ditscover": "0.1.0",
+    "locomotif": "0.2.0",
+    "stomp": "1.14.1"
+  },
+  "config": {
+    "datasets": [
+      {
+        "synthetic": {
+          "name": "synth-varlen",
+          "n_series": 20,
+          "n": 5000,
+          "lens": [
+            40,
+            60,
+            80
+          ],
+          "occ": 6,
+          "stretch": 0.3,
+          "noise": 0.1,
+          "seed": 0
+        }
+      },
+      {
+        "tsmd": {
+          "name": "ECG5000",
+          "split": "test",
+          "n_series": 20
+        }
+      },
+      {
+        "tsmd": {
+          "name": "Symbols",
+          "split": "test",
+          "n_series": 20
+        }
+      },
+      {
+        "yfinance": {
+          "name": "indices-weekly",
+          "tickers": [
+            "^GSPC",
+            "^IBEX",
+            "BTC-USD"
+          ],
+          "start": "2015-01-01",
+          "end": "2025-01-01",
+          "period": null,
+          "interval": "1wk",
+          "field": "Close",
+          "min_len": 8,
+          "max_len": 26,
+          "k": 5
+        }
+      }
+    ],
+    "methods": [
+      {
+        "method": "ditscover",
+        "label": "ditscover",
+        "params": {
+          "max_generations": 300,
+          "population": 200,
+          "stagnation_window": 30
+        }
+      },
+      {
+        "method": "locomotif",
+        "label": "locomotif",
+        "params": {
+          "overlap": 0.0,
+          "rho": 0.8,
+          "warping": true
+        }
+      },
+      {
+        "method": "stomp",
+        "label": "stomp",
+        "params": {
+          "lengths": null,
+          "max_matches": 20
+        }
+      }
+    ],
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "k": "oracle",
+    "timeout_s": 600.0,
+    "threads": null,
+    "jobs": 1,
+    "eval": {
+      "average": "micro",
+      "off_target": "ignore"
+    },
+    "scaling": {
+      "lengths": [
+        1000,
+        2000,
+        5000,
+        10000,
+        20000
+      ],
+      "repeats": 3,
+      "methods": null
+    }
+  }
+}

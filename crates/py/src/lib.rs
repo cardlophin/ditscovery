@@ -1,4 +1,6 @@
+use ditscover_core::bench::{BenchConfig, Synthetic};
 use ditscover_core::config::{Config, yaml_value};
+use ditscover_core::metrics::{self, Average, GroundTruth, OffTarget};
 use ditscover_core::result::RunResult;
 use ditscover_core::{Error, VERSION, load_data, synth};
 use numpy::PyReadonlyArray1;
@@ -12,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use tracing_subscriber::filter::LevelFilter;
+
+type Sets = Vec<Vec<(u32, u32)>>;
 
 fn err(e: Error) -> PyErr {
     match e {
@@ -36,6 +40,24 @@ fn pairs(dict: Option<&Bound<'_, PyDict>>, yaml: bool) -> PyResult<Vec<(String, 
         .collect()
 }
 
+type Inputs = (Option<String>, Option<Value>, Vec<(String, Value)>);
+
+fn inputs(
+    path: Option<String>,
+    base: Option<&Bound<'_, PyAny>>,
+    overrides: Option<&Bound<'_, PyDict>>,
+    yaml_overrides: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Inputs> {
+    let read = |p: String| {
+        std::fs::read_to_string(&p).map_err(|e| PyOSError::new_err(format!("{p}: {e}")))
+    };
+    let yaml = path.map(read).transpose()?;
+    let base: Option<Value> = base.map(depythonize).transpose()?;
+    let mut ov = pairs(overrides, false)?;
+    ov.extend(pairs(yaml_overrides, true)?);
+    Ok((yaml, base, ov))
+}
+
 #[pyfunction]
 #[pyo3(signature = (path=None, base=None, overrides=None, yaml_overrides=None))]
 fn build_config<'py>(
@@ -45,17 +67,35 @@ fn build_config<'py>(
     overrides: Option<&Bound<'py, PyDict>>,
     yaml_overrides: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let yaml = match &path {
-        Some(p) => {
-            Some(std::fs::read_to_string(p).map_err(|e| PyOSError::new_err(format!("{p}: {e}")))?)
-        }
-        None => None,
-    };
-    let base: Option<Value> = base.map(depythonize).transpose()?;
-    let mut ov = pairs(overrides, false)?;
-    ov.extend(pairs(yaml_overrides, true)?);
+    let (yaml, base, ov) = inputs(path, base, overrides, yaml_overrides)?;
     let cfg = Config::build(yaml.as_deref(), base, &ov).map_err(err)?;
     Ok(pythonize(py, &cfg)?)
+}
+
+#[pyfunction]
+#[pyo3(signature = (path=None, base=None, overrides=None, yaml_overrides=None))]
+fn build_bench_config<'py>(
+    py: Python<'py>,
+    path: Option<String>,
+    base: Option<&Bound<'py, PyAny>>,
+    overrides: Option<&Bound<'py, PyDict>>,
+    yaml_overrides: Option<&Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let (yaml, base, ov) = inputs(path, base, overrides, yaml_overrides)?;
+    let cfg = BenchConfig::build(yaml.as_deref(), base, &ov).map_err(err)?;
+    Ok(pythonize(py, &cfg)?)
+}
+
+#[pyfunction]
+fn bench_yaml(config: &Bound<'_, PyAny>) -> PyResult<String> {
+    let cfg: BenchConfig = depythonize(config)?;
+    Ok(cfg.to_yaml())
+}
+
+#[pyfunction]
+fn synthetic_suite(dir: PathBuf, spec: &Bound<'_, PyAny>) -> PyResult<Vec<PathBuf>> {
+    let spec: Synthetic = depythonize(spec)?;
+    synth::suite(&dir, &spec).map_err(err)
 }
 
 fn init_tracing(level: &str) {
@@ -70,15 +110,17 @@ fn init_tracing(level: &str) {
 // Runs the engine off the GIL and polls Python signals every 100 ms; Ctrl+C cancels the run
 // and the partial result is returned.
 #[pyfunction]
+#[pyo3(signature = (values, config, timestamps=None))]
 fn discover<'py>(
     py: Python<'py>,
     values: Option<PyReadonlyArray1<'py, f64>>,
     config: &Bound<'py, PyAny>,
+    timestamps: Option<Vec<String>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let cfg: Config = depythonize(config)?;
     init_tracing(&cfg.log.level);
-    let values = match values {
-        Some(a) => a.as_slice()?.to_vec(),
+    let (values, timestamps) = match values {
+        Some(a) => (a.as_slice()?.to_vec(), timestamps),
         None => py.detach(|| load_data(&cfg)).map_err(err)?,
     };
     let cancel = Arc::new(AtomicBool::new(false));
@@ -86,7 +128,7 @@ fn discover<'py>(
     let rx = Mutex::new(rx);
     let flag = cancel.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(ditscover_core::discover(values, &cfg, &flag));
+        let _ = tx.send(ditscover_core::discover_dated(values, timestamps, &cfg, &flag));
     });
     let result = loop {
         let wait = || rx.lock().expect("receiver lock").recv_timeout(Duration::from_millis(100));
@@ -128,8 +170,45 @@ fn synthetic(
     synth::planted(n, &lens, occ, stretch, noise, seed)
 }
 
+fn bad(key: &str, value: &str, options: &str) -> PyErr {
+    PyValueError::new_err(format!("{key}: expected {options}, got {value:?}"))
+}
+
+#[pyfunction]
+#[pyo3(signature = (found, truth, average="micro", off_target="ignore"))]
+fn prom<'py>(
+    py: Python<'py>,
+    found: Vec<Vec<(u32, u32)>>,
+    truth: Vec<Vec<(u32, u32)>>,
+    average: &str,
+    off_target: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let avg = match average {
+        "micro" => Average::Micro,
+        "macro" => Average::Macro,
+        _ => return Err(bad("average", average, "micro|macro")),
+    };
+    let off = match off_target {
+        "ignore" => OffTarget::Ignore,
+        "penalize" => OffTarget::Penalize,
+        _ => return Err(bad("off_target", off_target, "ignore|penalize")),
+    };
+    Ok(pythonize(py, &metrics::prom(&found, &truth, avg, off))?)
+}
+
+#[pyfunction]
+fn read_truth(path: PathBuf) -> PyResult<(Vec<f64>, Sets)> {
+    let gt = GroundTruth::load(&path).map_err(err)?;
+    Ok((gt.series, gt.sets))
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(prom, m)?)?;
+    m.add_function(wrap_pyfunction!(build_bench_config, m)?)?;
+    m.add_function(wrap_pyfunction!(bench_yaml, m)?)?;
+    m.add_function(wrap_pyfunction!(synthetic_suite, m)?)?;
+    m.add_function(wrap_pyfunction!(read_truth, m)?)?;
     m.add("__version__", VERSION)?;
     m.add_function(wrap_pyfunction!(build_config, m)?)?;
     m.add_function(wrap_pyfunction!(discover, m)?)?;

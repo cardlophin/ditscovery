@@ -1,5 +1,5 @@
 use ditscover_core::config::Config;
-use ditscover_core::{discover, synth};
+use ditscover_core::{discover, metrics, synth};
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
@@ -29,7 +29,7 @@ fn planted_motifs_are_recovered() {
         let found: Vec<(u32, u32)> =
             res.motifs.iter().take(5).flat_map(|m| m.occurrences.clone()).collect();
         let truth: Vec<(u32, u32)> = planted.into_iter().flatten().collect();
-        let (r, p) = synth::match_occurrences(&found, &truth);
+        let (r, p) = metrics::match_occurrences(&found, &truth);
         eprintln!(
             "seed {seed}: recall {r:.3} precision {p:.3} stop {:?} gens {}",
             res.stop, res.generations

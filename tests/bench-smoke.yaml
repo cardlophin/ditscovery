@@ -1,0 +1,9 @@
+datasets:
+  - synthetic: {name: synth-varlen, n_series: 2, n: 3000, lens: [40, 60], occ: 4}
+methods:
+  - method: ditscover
+    params: {population: 60, max_generations: 30}
+  - method: locomotif
+  - method: stomp
+seeds: [0]
+timeout_s: 300

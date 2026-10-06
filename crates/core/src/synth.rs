@@ -1,8 +1,12 @@
+use crate::bench::Synthetic;
+use crate::config::{Error, cfg_err};
+use crate::metrics::GroundTruth;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
 use std::f64::consts::PI;
+use std::path::{Path, PathBuf};
 
 fn shape(kind: usize, t: f64) -> f64 {
     match kind % 3 {
@@ -63,34 +67,48 @@ pub fn planted(
     (x, out)
 }
 
-pub fn iou(a: (u32, u32), b: (u32, u32)) -> f64 {
-    let inter = (a.0 + a.1).min(b.0 + b.1).saturating_sub(a.0.max(b.0)) as f64;
-    inter / ((a.1 + b.1) as f64 - inter)
-}
-
-pub fn match_occurrences(found: &[(u32, u32)], planted: &[(u32, u32)]) -> (f64, f64) {
-    let mut pairs: Vec<(f64, usize, usize)> = found
-        .iter()
-        .enumerate()
-        .flat_map(|(i, &f)| planted.iter().enumerate().map(move |(j, &p)| (iou(f, p), i, j)))
-        .filter(|&(v, _, _)| v >= 0.5)
-        .collect();
-    pairs.sort_by(|a, b| b.0.total_cmp(&a.0).then((a.1, a.2).cmp(&(b.1, b.2))));
-    let (mut uf, mut up) = (vec![false; found.len()], vec![false; planted.len()]);
-    let mut tp = 0;
-    for (_, i, j) in pairs {
-        if !uf[i] && !up[j] {
-            (uf[i], up[j]) = (true, true);
-            tp += 1;
-        }
+// Series i uses seed + i; files are `<dir>/<i>.json` ground-truth files.
+pub fn suite(dir: &Path, s: &Synthetic) -> Result<Vec<PathBuf>, Error> {
+    let need: f64 = s.lens.iter().map(|&l| (l as f64 * (1.0 + s.stretch)).round() + 1.0).sum();
+    if need * s.occ as f64 >= s.n as f64 {
+        let msg = format!("n = {} too short for {} occurrences of {:?}", s.n, s.occ, s.lens);
+        return Err(cfg_err("n", msg));
     }
-    let ratio = |d: usize| if d == 0 { 0.0 } else { tp as f64 / d as f64 };
-    (ratio(planted.len()), ratio(found.len()))
+    std::fs::create_dir_all(dir).map_err(|source| Error::Io { path: dir.into(), source })?;
+    (0..s.n_series)
+        .map(|i| {
+            let (series, sets) =
+                planted(s.n, &s.lens, s.occ, s.stretch, s.noise, s.seed + i as u64);
+            let path = dir.join(format!("{i}.json"));
+            GroundTruth { name: format!("{}#{i}", s.name), series, sets }.save(&path)?;
+            Ok(path)
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suite_writes_ground_truth_files() {
+        let dir = std::env::temp_dir().join("ditscover-suite-test");
+        let s = Synthetic {
+            name: "s".into(),
+            n_series: 2,
+            n: 1000,
+            lens: vec![30],
+            occ: 3,
+            ..Default::default()
+        };
+        let files = suite(&dir, &s).unwrap();
+        assert_eq!(files.len(), 2);
+        let gt = GroundTruth::load(&files[1]).unwrap();
+        assert_eq!((gt.name.as_str(), gt.series.len(), gt.sets[0].len()), ("s#1", 1000, 3));
+        assert_eq!(gt.series, planted(1000, &[30], 3, 0.3, 0.1, 1).0);
+        let short = Synthetic { n: 100, ..s };
+        assert!(suite(&dir, &short).unwrap_err().to_string().contains("too short"));
+    }
 
     #[test]
     fn planted_occurrences_are_valid() {
@@ -109,19 +127,5 @@ mod tests {
             assert!(occ.iter().all(|&(_, l)| l as f64 >= lo.floor() && l as f64 <= hi.ceil()));
         }
         assert_eq!(planted(5000, &lens, 8, 0.3, 0.1, 1).0, x);
-    }
-
-    #[test]
-    fn iou_matching() {
-        assert_eq!(iou((0, 10), (0, 10)), 1.0);
-        assert!((iou((20, 10), (22, 10)) - 8.0 / 12.0).abs() < 1e-12);
-        assert_eq!(iou((0, 10), (10, 10)), 0.0);
-        let (r, p) =
-            match_occurrences(&[(0, 10), (20, 10), (50, 10)], &[(0, 10), (22, 10), (100, 10)]);
-        assert!((r - 2.0 / 3.0).abs() < 1e-12 && (p - 2.0 / 3.0).abs() < 1e-12);
-        let (r, p) = match_occurrences(&[(0, 10), (1, 10)], &[(0, 10)]);
-        assert_eq!((r, p), (1.0, 0.5));
-        assert_eq!(match_occurrences(&[(0, 10)], &[(6, 10)]), (0.0, 0.0));
-        assert_eq!(match_occurrences(&[], &[(6, 10)]), (0.0, 0.0));
     }
 }

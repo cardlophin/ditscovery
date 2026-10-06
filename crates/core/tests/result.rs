@@ -1,8 +1,9 @@
 use ditscover_core::config::Config;
+use ditscover_core::metrics::GroundTruth;
 use ditscover_core::motif::{Ctx, Individual, Segment};
 use ditscover_core::result::{RunResult, to_motif, top_k};
 use ditscover_core::series::Series;
-use ditscover_core::{discover, synth};
+use ditscover_core::{discover, discover_dated, synth};
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
@@ -65,6 +66,88 @@ fn output_dir_writes_the_result() {
     let dir = tmp("output-dir");
     let res = small_run(Some(&dir));
     same(&res, &RunResult::load(&dir).unwrap());
+}
+
+fn gt_config(gt: &std::path::Path, dir: &std::path::Path) -> Config {
+    let o: Vec<(String, Value)> = [
+        ("min_len", json!(20)),
+        ("max_len", json!(40)),
+        ("population", json!(20)),
+        ("max_generations", json!(5)),
+        ("ground_truth", json!(gt)),
+        ("dir", json!(dir)),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    Config::build(None, None, &o).unwrap()
+}
+
+#[test]
+fn ground_truth_adds_metrics_that_survive_reload() {
+    let (x, sets) = synth::planted(2000, &[30], 5, 0.2, 0.1, 4);
+    let dir = tmp("metrics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let gt = dir.join("gt.json");
+    GroundTruth { name: "p".into(), series: x.clone(), sets }.save(&gt).unwrap();
+    let res = discover(x, &gt_config(&gt, &dir.join("run")), &AtomicBool::new(false)).unwrap();
+    let m = res.metrics.clone().expect("metrics");
+    assert_eq!(m.tp + m.fn_, 5);
+    assert_eq!(RunResult::load(&dir.join("run")).unwrap().metrics, res.metrics);
+}
+
+#[test]
+fn missing_ground_truth_fails_before_running() {
+    let (x, _) = synth::planted(2000, &[30], 5, 0.2, 0.1, 4);
+    let dir = tmp("missing-gt");
+    let cfg = gt_config(&dir.join("nope.json"), &dir.join("run"));
+    let e = discover(x, &cfg, &AtomicBool::new(false)).unwrap_err().to_string();
+    assert!(e.contains("nope.json"), "{e}");
+    assert!(!dir.join("run").exists());
+}
+
+#[test]
+fn results_without_metrics_still_load() {
+    let res = small_run(None);
+    assert!(res.metrics.is_none());
+    let dir = tmp("old-format");
+    res.save(&dir).unwrap();
+    let path = dir.join("results.json");
+    let mut json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    json.as_object_mut().unwrap().remove("metrics");
+    std::fs::write(&path, json.to_string()).unwrap();
+    assert!(RunResult::load(&dir).unwrap().metrics.is_none());
+}
+
+#[test]
+fn timestamps_are_the_first_column_of_series_csv() {
+    let mut res = small_run(None);
+    res.timestamps = Some((0..res.series.len()).map(|i| format!("t{i}")).collect());
+    let dir = tmp("dated");
+    res.save(&dir).unwrap();
+    let csv = std::fs::read_to_string(dir.join("series.csv")).unwrap();
+    assert!(csv.starts_with("timestamp,value\nt0,"), "{}", &csv[..40]);
+    let back = RunResult::load(&dir).unwrap();
+    assert_eq!(back.timestamps, res.timestamps);
+    assert!(back.series[7].is_nan());
+    let plain = small_run(None);
+    plain.save(&tmp("undated")).unwrap();
+    assert!(RunResult::load(&tmp_keep("undated")).unwrap().timestamps.is_none());
+}
+
+#[test]
+fn timestamps_must_match_the_series() {
+    let (x, _) = synth::planted(2000, &[30], 5, 0.2, 0.1, 4);
+    let o: Vec<(String, Value)> =
+        vec![("min_len".into(), json!(20)), ("max_len".into(), json!(40))];
+    let cfg = Config::build(None, None, &o).unwrap();
+    let ts = Some(vec!["2024-01-01".to_string()]);
+    let e = discover_dated(x, ts, &cfg, &AtomicBool::new(false)).unwrap_err().to_string();
+    assert!(e.contains("timestamps"), "{e}");
+}
+
+fn tmp_keep(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join("ditscover-result-tests").join(name)
 }
 
 fn ind(start: u32, rank: u32, obj: [f64; 3]) -> Individual {

@@ -60,6 +60,19 @@ fn bad_content_is_explicit() {
 }
 
 #[test]
+fn time_column_is_read_as_text() {
+    let path = file("dated.csv", "Date,Close\n2024-01-02,1.5\n2024-01-03,\n2024-01-05,2\n");
+    let l = CsvLoader::new(&path).column(Column::Name("Close".into()));
+    assert_eq!(
+        l.text(&Column::Name("Date".into())).unwrap(),
+        ["2024-01-02", "2024-01-03", "2024-01-05"]
+    );
+    assert_eq!(l.text(&Column::Index(0)).unwrap().len(), 3);
+    let e = l.text(&Column::Name("When".into())).unwrap_err().to_string();
+    assert!(e.contains("When"), "{e}");
+}
+
+#[test]
 fn missing_cells_are_nan() {
     let v = load("g.csv", "a,b\n1,\n2,NaN\n3,5\n", |l| l.column(Column::Name("b".into()))).unwrap();
     assert!(v[0].is_nan() && v[1].is_nan());

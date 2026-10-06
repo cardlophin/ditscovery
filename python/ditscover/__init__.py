@@ -5,7 +5,18 @@ import numpy as np
 
 from . import _core
 
-__all__ = ["Motif", "Result", "discover", "load"]
+__all__ = [
+    "Bench",
+    "Motif",
+    "Result",
+    "bench",
+    "discover",
+    "load",
+    "load_bench",
+    "prom",
+    "read_truth",
+    "synthetic_suite",
+]
 __version__ = _core.__version__
 
 
@@ -48,6 +59,8 @@ class Result:
         self.config = raw["config"]
         self.version = raw["version"]
         self.series = np.asarray(raw["series"], dtype=float)
+        self.metrics = raw.get("metrics")
+        self.timestamps = raw.get("timestamps")
 
     def __repr__(self):
         return (
@@ -58,10 +71,10 @@ class Result:
         _core.save_result(self._raw, str(dir))
 
     def plot(self, kind="all", path=None, cdn=False):
-        from . import plot
+        from . import plot, report
 
         if kind == "all":
-            return Report(plot.report(self, path, cdn))
+            return Report(report.run_report(self, path, cdn))
         fig = plot.VIEWS[kind](self)
         if path is not None:
             fig.write_html(path, include_plotlyjs=plot.plotlyjs(cdn))
@@ -77,6 +90,29 @@ def load(dir) -> Result:
     return Result(_core.load_result(str(dir)))
 
 
+def _sets(x):
+    if isinstance(x, Result):
+        return [m.occurrences for m in x.motifs]
+    return [[(int(s), int(n)) for s, n in occ] for occ in x]
+
+
+def prom(found, truth, average="micro", off_target="ignore") -> dict:
+    return _core.prom(_sets(found), _sets(truth), average, off_target)
+
+
+def synthetic_suite(
+    dir, n_series=20, n=5000, lens=(40, 60, 80), occ=6, stretch=0.3, noise=0.1, seed=0, name=""
+) -> list[Path]:
+    spec = dict(name=name, n_series=n_series, n=n, lens=list(lens), occ=occ)
+    spec |= dict(stretch=stretch, noise=noise, seed=seed)
+    return [Path(p) for p in _core.synthetic_suite(str(dir), spec)]
+
+
+def read_truth(path):
+    x, sets = _core.read_truth(str(path))
+    return np.asarray(x, dtype=float), sets
+
+
 def _plain(overrides):
     return {k: str(v) if isinstance(v, Path) else v for k, v in overrides.items()}
 
@@ -86,10 +122,28 @@ def _config(config, overrides, yaml_overrides=None):
     return _core.build_config(path, base, _plain(overrides), yaml_overrides)
 
 
-def discover(data, config=None, **overrides) -> Result:
-    values = None
+def market(cfg):
+    if not cfg["data"]["ticker"]:
+        return None, None
+    from . import sources
+
+    values, stamps, resolved = sources.fetch(cfg["data"])
+    cfg["data"].update(resolved)
+    return np.ascontiguousarray(values), stamps
+
+
+def discover(data=None, config=None, **overrides) -> Result:
+    values = stamps = None
     if isinstance(data, str | Path):
         overrides = {"path": str(data), **overrides}
-    else:
+    elif data is not None:
         values = np.ascontiguousarray(np.asarray(data, dtype=np.float64).ravel())
-    return Result(_core.discover(values, _config(config, overrides)))
+    cfg = _config(config, overrides)
+    if values is None:
+        values, stamps = market(cfg)
+    return Result(_core.discover(values, cfg, stamps))
+
+
+# Imported last (the subpackage needs the names above); rebinding `bench` to the function makes
+# `ds.bench(...)` callable while `ditscover.bench.*` stays importable from sys.modules.
+from .bench import Bench, bench, load_bench  # noqa: E402

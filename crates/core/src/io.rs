@@ -41,9 +41,9 @@ impl CsvLoader {
         Error::Data(format!("{}: {msg}", self.path.display()))
     }
 
-    fn index(&self, names: &[String]) -> Result<usize, Error> {
+    fn index(&self, column: &Column, names: &[String]) -> Result<usize, Error> {
         let available = || names.join(", ");
-        match &self.column {
+        match column {
             Column::Name(n) if !self.header => {
                 Err(self.data(format!("column '{n}' needs a header row")))
             }
@@ -57,6 +57,33 @@ impl CsvLoader {
             Column::Index(i) => Ok(*i),
         }
     }
+
+    fn open(&self) -> Result<(csv::Reader<std::fs::File>, Vec<String>), Error> {
+        let file = std::fs::File::open(&self.path)
+            .map_err(|source| Error::Io { path: self.path.clone(), source })?;
+        let mut rdr = csv::ReaderBuilder::new()
+            .has_headers(self.header)
+            .delimiter(self.delimiter)
+            .from_reader(file);
+        let names: Vec<String> = match self.header {
+            true => rdr.headers().map_err(|e| self.data(e))?.iter().map(String::from).collect(),
+            false => Vec::new(),
+        };
+        Ok((rdr, names))
+    }
+
+    // Cells of `column` as trimmed text (e.g. dates), one per data row.
+    pub fn text(&self, column: &Column) -> Result<Vec<String>, Error> {
+        let (mut rdr, names) = self.open()?;
+        let idx = self.index(column, &names)?;
+        rdr.records()
+            .map(|rec| {
+                let rec = rec.map_err(|e| self.data(e))?;
+                let cell = rec.get(idx).ok_or_else(|| self.data(format!("no column {idx}")))?;
+                Ok(cell.trim().to_string())
+            })
+            .collect()
+    }
 }
 
 fn parse(cell: &str) -> Option<f64> {
@@ -68,17 +95,8 @@ fn parse(cell: &str) -> Option<f64> {
 
 impl Loader for CsvLoader {
     fn load(&self) -> Result<Vec<f64>, Error> {
-        let file = std::fs::File::open(&self.path)
-            .map_err(|source| Error::Io { path: self.path.clone(), source })?;
-        let mut rdr = csv::ReaderBuilder::new()
-            .has_headers(self.header)
-            .delimiter(self.delimiter)
-            .from_reader(file);
-        let names: Vec<String> = match self.header {
-            true => rdr.headers().map_err(|e| self.data(e))?.iter().map(String::from).collect(),
-            false => Vec::new(),
-        };
-        let idx = self.index(&names)?;
+        let (mut rdr, names) = self.open()?;
+        let idx = self.index(&self.column, &names)?;
         let label = names.get(idx).cloned().unwrap_or_else(|| idx.to_string());
         let mut out = Vec::new();
         for (row, rec) in rdr.records().enumerate() {
