@@ -1,0 +1,19 @@
+# Final evaluation: pruned defaults vs tuned baselines, test split evaluated once (SC-001..SC-003).
+datasets:
+  - synthetic: {name: synth-varlen, n_series: 20, n: 5000, lens: [40, 60, 80], occ: 6, stretch: 0.3, noise: 0.1, seed: 0}
+  - tsmd: {name: ECG5000, split: test, n_series: 20}
+  - tsmd: {name: Fungi, split: test, n_series: 20}
+  - tsmd: {name: Plane, split: test, n_series: 20}
+  - tsmd: {name: Mallat, split: test, n_series: 20}
+  - tsmd: {name: Symbols, split: test, n_series: 20}
+
+tune: {n_series: 10, metric: f1}
+seeds: [0, 1, 2]
+k: oracle
+stats: true
+save_sets: true
+
+methods:
+  - {method: stomp, grid: {max_matches: [10, 20]}}
+  - {method: locomotif, grid: {rho: [0.6, 0.7, 0.8, 0.9], warping: [true, false]}}
+  - {method: ditscover}
