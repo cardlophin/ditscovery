@@ -116,18 +116,19 @@ import ditscover as ds
 res = ds.discover(
     "data/kaggle-electric-production.csv",
     column="IPG2211A2N",
-    min_len=9, max_len=15,          # in points of the preprocessed series
+    min_len=9,
+    max_len=15,  # in points of the preprocessed series
     preprocess=[{"nan": "interpolate"}, {"detrend": "linear"}, {"normalize": "zscore"}],
-    top_k="auto",                   # every closed motif set (positive margin)
+    top_k="auto",  # every closed motif set (positive margin)
     seed=42,
 )
 
 for m in res.motifs:
     print(m.support, m.mean_len, m.margin, m.occurrences[:3])
 
-res.labels        # one motif index per original time point (-1 = none)
-res.front         # the full Pareto front
-res.plot()        # self-contained interactive HTML report
+res.labels  # one motif index per original time point (-1 = none)
+res.front  # the full Pareto front
+res.plot()  # self-contained interactive HTML report
 res.save("results/electric")
 ```
 
