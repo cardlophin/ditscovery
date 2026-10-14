@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["maturin>=1.9,<2", "pytest>=8", "ruff>=0.6", "pandas>=2"]
-bench = ["stumpy>=1.13", "dtai-locomotif>=0.1"]
+bench = ["stumpy>=1.13", "dtai-locomotif>=0.1", "scipy>=1.11"]
 finance = ["yfinance>=0.2.50", "pandas>=2"]
 
 [project.scripts]
@@ -38,5 +38,8 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
-markers = ["network: downloads real data (run with -m network)"]
-addopts = "-m 'not network'"
+markers = [
+    "network: downloads real data (run with -m network)",
+    "slow: release-build timing checks (run with -m slow)",
+]
+addopts = "-m 'not network and not slow'"

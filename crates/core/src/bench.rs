@@ -56,6 +56,23 @@ pub struct BenchConfig {
     pub jobs: usize,
     pub eval: BenchEval,
     pub scaling: Option<Scaling>,
+    pub tune: Option<Tune>,
+    pub max_runs: u64,
+    pub stats: bool,
+    pub save_sets: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Tune {
+    pub n_series: usize,
+    pub metric: String,
+}
+
+impl Default for Tune {
+    fn default() -> Self {
+        Self { n_series: 10, metric: "f1".into() }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -78,6 +95,7 @@ pub enum DatasetSpec {
 #[serde(deny_unknown_fields, default)]
 pub struct Synthetic {
     pub name: String,
+    pub split: Split,
     pub n_series: usize,
     pub n: usize,
     pub lens: Vec<u32>,
@@ -152,6 +170,8 @@ pub struct MethodSpec {
     pub label: Option<String>,
     #[serde(default)]
     pub params: Map<String, Value>,
+    #[serde(default)]
+    pub grid: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -180,6 +200,10 @@ impl Default for BenchConfig {
             jobs: 1,
             eval: BenchEval::default(),
             scaling: None,
+            tune: None,
+            max_runs: 20_000,
+            stats: true,
+            save_sets: true,
         }
     }
 }
@@ -188,6 +212,7 @@ impl Default for Synthetic {
     fn default() -> Self {
         Self {
             name: String::new(),
+            split: Split::Test,
             n_series: 20,
             n: 5000,
             lens: vec![40, 60, 80],
@@ -223,6 +248,14 @@ impl DatasetSpec {
             DatasetSpec::Tsmd(t) => format!("{:?}", t.name),
             DatasetSpec::Files(f) => f.name.clone(),
             DatasetSpec::Yfinance(y) => y.name.clone(),
+        }
+    }
+
+    pub fn split(&self) -> Split {
+        match self {
+            DatasetSpec::Synthetic(s) => s.split,
+            DatasetSpec::Tsmd(t) => t.split,
+            DatasetSpec::Files(_) | DatasetSpec::Yfinance(_) => Split::Test,
         }
     }
 }
@@ -288,14 +321,19 @@ impl BenchConfig {
         check(self.timeout_s > 0.0, "timeout_s", "must be > 0")?;
         check(self.jobs >= 1, "jobs", "must be >= 1")?;
         check(self.threads.is_none_or(|t| t >= 1), "threads", "must be >= 1")?;
+        check(self.max_runs >= 1, "max_runs", "must be >= 1")?;
+        if let Some(t) = &self.tune {
+            check(t.n_series >= 1, "tune.n_series", "must be >= 1")?;
+            check(t.metric == "f1", "tune.metric", "must be f1")?;
+        }
         let mut names = Vec::new();
         for (i, d) in self.datasets.iter().enumerate() {
-            let name = d.name();
+            let id = (d.name(), d.split());
             let key = format!("datasets[{i}].name");
-            check(!name.is_empty(), &key, "required")?;
-            check(!names.contains(&name), &key, &format!("duplicate `{name}`"))?;
+            check(!id.0.is_empty(), &key, "required")?;
+            check(!names.contains(&id), &key, &format!("duplicate `{}` on {:?}", id.0, id.1))?;
             validate_dataset(d, &format!("datasets[{i}]"))?;
-            names.push(name);
+            names.push(id);
         }
         let mut labels = Vec::new();
         for (i, m) in self.methods.iter().enumerate() {
@@ -303,8 +341,19 @@ impl BenchConfig {
             let msg = format!("duplicate `{label}`; give each entry a distinct label");
             check(!labels.contains(&label), &format!("methods[{i}].label"), &msg)?;
             labels.push(label);
+            self.validate_grid(m, i)?;
         }
         self.scaling.as_ref().map_or(Ok(()), |s| validate_scaling(s, &labels))
+    }
+
+    fn validate_grid(&self, m: &MethodSpec, i: usize) -> Result<(), Error> {
+        let at = format!("methods[{i}].grid");
+        check(m.grid.is_empty() || self.tune.is_some(), &at, "needs `tune`")?;
+        for (k, v) in &m.grid {
+            let ok = v.as_array().is_some_and(|a| !a.is_empty());
+            check(ok, &format!("{at}.{k}"), "must be a non-empty list")?;
+        }
+        Ok(())
     }
 }
 

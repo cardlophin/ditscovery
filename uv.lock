@@ -391,6 +391,7 @@ dependencies = [
 [package.optional-dependencies]
 bench = [
     { name = "dtai-locomotif" },
+    { name = "scipy" },
     { name = "stumpy" },
 ]
 dev = [
@@ -414,6 +415,7 @@ requires-dist = [
     { name = "plotly", specifier = ">=5.20" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
+    { name = "scipy", marker = "extra == 'bench'", specifier = ">=1.11" },
     { name = "stumpy", marker = "extra == 'bench'", specifier = ">=1.13" },
     { name = "yfinance", marker = "extra == 'finance'", specifier = ">=0.2.50" },
 ]

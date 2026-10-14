@@ -275,24 +275,32 @@ paired tests) and the recommended defaults.
 
 **Ablation (US5)**
 
-- **FR-027**: Every new component MUST be switchable for the ablation; the benchmark MUST run the
+- **FR-027**: Every new default-on component MUST be switchable for the ablation; the benchmark MUST run the
   previous algorithm, the full new one and full-minus-each-component on the same series and seeds.
 - **FR-028**: The report MUST show the F1 change per removed component with significance, on
   validation and test; keep/delete decisions MUST use validation results only, test results are
   reported but never change a decision. The ablation MUST use 30 validation series per dataset, with
   seeds averaged per series before a paired Wilcoxon test, and Holm correction applied across the
   components within each dataset.
-- **FR-029**: After the ablation, a component MUST be kept only if removing it significantly lowers
+- **FR-029**: FR-008–FR-024 describe candidate components and stay binding only while they survive
+  the ablation; conflict-free labelling (FR-025) is an output guarantee (SC-004), measured in the
+  ablation but never deleted. After the ablation, a component MUST be kept only if removing it significantly lowers
   validation F1 (Holm-adjusted p < 0.05) on ≥ 1 dataset and significantly raises it on none; every
   other component (including those with no significant effect) MUST be deleted and defaults
   updated; decisions MUST be recorded in the feature's research notes.
+
+**Ablation outcome** (research R8): binding — FR-008, FR-013, FR-015, FR-017 (guarded addition,
+donation and removal), FR-020, FR-022 (minimum generations only), FR-023, FR-024, FR-025, FR-026;
+the margin to the nearest outsider and the random-pair scale are still computed for ranking,
+labelling and the guarded operators. Retired — FR-009/FR-010/FR-011 as objectives (objectives are
+support, extent and cohesion), FR-012 relative variance floor (the absolute `min_std` remains),
+FR-016, FR-018, FR-019, FR-021, FR-022 injection; FR-014 resolved by deleting the previous fitness.
 
 ### Key Entities
 
 - **Candidate index**: compact per-length sketches of all windows, used to find nearest outsiders,
   additions and seeds quickly.
 - **Fitness v2 values**: coverage, normalised extent, normalised margin, quality score.
-- **Archive**: distinct non-dominated motifs found so far.
 - **Labelling**: one motif number (or none) per original time point.
 - **Run set record**: discovered sets of one benchmark run.
 - **Ablation variant**: a labelled ditscover configuration with one component switched.
@@ -312,7 +320,7 @@ paired tests) and the recommended defaults.
   median < 10 s on a 20 000-point series.
 - **SC-006**: Every component kept as default significantly improves validation F1 (Holm-adjusted
   p < 0.05) on at least one dataset without a significant loss on another; 100 % of other components
-  are deleted from the code.
+  are deleted from the code (conflict-free labelling excepted, FR-025).
 - **SC-007**: Repeated runs with the same seed remain identical (as in features 001-002).
 
 ## Assumptions
@@ -321,7 +329,7 @@ paired tests) and the recommended defaults.
   suite are the evaluation set; each has a validation and a test split.
 - Methods keep receiving the number of ground-truth sets (`k = oracle`) in benchmarks.
 - Tuning grids stay small (≤ 12 combinations per method); the ablation (30 validation series per
-  dataset and split × 3 seeds, both splits) is expected to fit in an overnight run (~10 h
+  dataset and split × 3 seeds, both splits) is expected to fit in an overnight run (~11 h
   sequential).
 - An MDL-based single objective is out of scope; it can be a later feature if the margin-based
   fitness falls short.

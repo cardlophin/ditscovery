@@ -123,6 +123,10 @@ def _motif_rows(res):
             (f"{m.cohesion:.4f}", m.cohesion),
             (f"{m.mean_len:.1f}", m.mean_len),
             (f"{m.stretch:.2f}", m.stretch),
+            (f"{m.extent:.4f}", m.extent),
+            (f"{m.margin:.3f}", m.margin),
+            (f"{m.coverage:.3f}", m.coverage),
+            (f"{m.quality:.4f}", m.quality),
             (plot.label(res, start), start),
         ]
 
@@ -140,7 +144,8 @@ def run_report(res, path=None, cdn=False):
     if res.metrics:
         names = (("Precision", "precision"), ("Recall", "recall"), ("F1", "f1"))
         cards += [card(name, f"{res.metrics[k]:.3f}") for name, k in names]
-    cols = ("#", "support", "cohesion", "mean length", "stretch", "first start")
+    cols = ("#", "support", "cohesion", "mean length", "stretch")
+    cols += ("extent", "margin", "coverage", "quality", "first start")
     tabs = [
         ("motifs", "Motifs", [plot.motifs(res), plot.overlay(res)]),
         ("evolution", "Evolution", [plot.evolution(res)]),
@@ -156,11 +161,14 @@ def _pm(r, key, spec=".3f"):
 
 
 def _summary_rows(s):
+    from .bench import ds_key
+
     for r in s["by_method_dataset"]:
-        rank = s["rank"].get(r["label"], {}).get(r["dataset"])
+        rank = s["rank"].get(r["label"], {}).get(ds_key(r["dataset"], r.get("split")))
+        where = plot.where(r)
         yield [
             (r["label"], r["label"]),
-            (r["dataset"], r["dataset"]),
+            (where, where),
             (r["n_runs"], r["n_runs"]),
             (r["failures"], r["failures"]),
             *(_pm(r, k) for k in ("precision", "recall", "f1")),
@@ -168,6 +176,57 @@ def _summary_rows(s):
             _pm(r, "delta_mb", ".1f"),
             ("-", None) if rank is None else (f"{rank:.2f}", rank),
         ]
+
+
+def _errors(b, limit=20):
+    from .bench import _key, datasets, split_of
+
+    stored, cfg = b.stored_sets(), b.summary.get("config") or {}
+    figs = []
+    for spec in cfg.get("datasets", []) if stored else []:
+        kind, d = next(iter(spec.items()))
+        if kind == "yfinance":
+            continue
+        split, items = d.get("split", "test"), []
+        for s in datasets.load(spec, b.out)[:limit]:
+            found = {}
+            for r in b.runs:
+                same = r["series"] == s["id"] and r["dataset"] == d["name"]
+                same = same and split_of(r) == split and r["label"] not in found
+                if same and (sets := stored.get(_key(r))) is not None:
+                    found[r["label"]] = sets
+            if found:
+                items.append((s["id"], s["x"], s["sets"], found))
+        if items:
+            where = plot.where({"dataset": d["name"], "split": split})
+            title = f"{where}: colour = GT class; solid hit, dashed false alarm, dotted miss"
+            figs.append(plot.errors(items, title))
+    return figs
+
+
+def _ablation(s):
+    headers = [("component", "text"), ("dataset", "text"), ("split", "text")]
+    headers += [(c, "num") for c in ("ΔF1", "95 % CI low", "95 % CI high", "p (Holm)")]
+    rows = [
+        [
+            (r["component"], r["component"]),
+            (r["dataset"], r["dataset"]),
+            (r["split"], r["split"]),
+            (f"{r['delta_f1']:+.3f}{' *' if r['p_holm'] < 0.05 else ''}", r["delta_f1"]),
+            (f"{r['ci_low']:+.3f}", r["ci_low"]),
+            (f"{r['ci_high']:+.3f}", r["ci_high"]),
+            (f"{r['p_holm']:.4f}", r["p_holm"]),
+        ]
+        for r in s["ablation"]
+    ]
+    verdict = {True: "keep", False: "delete"}
+    dec = [
+        [(d["component"], d["component"]), (verdict[d["keep"]], None), (d["reason"], None)]
+        for d in s.get("decisions", [])
+    ]
+    decided = table([("component", "text"), ("decision", None), ("reason", None)], dec)
+    note = "<p>ΔF1 = F1 without the component − F1 of full; * Holm-adjusted p &lt; 0.05.</p>"
+    return [plot.ablation(s["ablation"]), decided, note, table(headers, rows)]
 
 
 def bench_report(b, path=None, cdn=False):
@@ -183,4 +242,8 @@ def bench_report(b, path=None, cdn=False):
         ("quality", "Quality", [plot.quality(s)]),
         ("cost", "Cost", cost),
     ]
+    if errors := _errors(b):
+        tabs.append(("errors", "Errors", errors))
+    if s.get("ablation"):
+        tabs.append(("ablation", "Ablation", _ablation(s)))
     return page("ditscover benchmark", cards, "", tabs, path, cdn)

@@ -2,37 +2,36 @@
 
 ## Config additions (`crates/core/src/config.rs`)
 
-All leaf names unique (flat overrides keep working). Defaults in brackets.
+All leaf names unique (flat overrides keep working). Defaults in brackets. After the ablation
+(research R8) only the surviving components remain; deleted leaves (`model`, `min_std_rel`,
+`margin`, `coverage`, `scale`, `phase`, `rescale`, `mating_tau`, `split`, `archive`, `immigrants`,
+`rank_by`, `dedupe_jaccard`) are rejected as unknown parameters.
 
 ### `fitness` (new section)
 
 | Leaf | Type | Default | Rule |
 |---|---|---|---|
-| `model` | `v1 \| v2` | `v2` | v1 = feature 001 objectives (support, cohesion, length) |
 | `extent_q` | f64 | 0.9 | (0, 1] |
 | `null_pairs` | u32 | 256 | ≥ 16 |
-| `min_std_rel` | f64 | 0.05 | [0, 1) |
 | `cid` | bool | false | |
 | `loo` | bool | true | ablation switch |
-| `margin` | bool | true | ablation switch (false ⇒ f3 = cohesion as in v1) |
-| `coverage` | bool | true | ablation switch (false ⇒ support + length as in v1) |
-| `scale` | bool | true | ablation switch (false ⇒ `c_ref` normalisation) |
+
+Objectives (minimised, in [0, 1]): support `(max_occ − k)/(max_occ − min_occ)`, extent / `c_ref`
+and cohesion / `c_ref`, the last two clamped to [0, 1.5] and divided by 1.5; `c_ref` is the worst
+cohesion of the initial population.
 
 ### `ga` additions
 
-`refine` (0.3), `refine_radius` (0.1), `phase` (0.2), `rescale` (0.15), `guarded_add` (true),
-`mating_tau` (0.5, `null` = off), `split` (0.05), `seed_nn` (0.4), `archive` (null = 2·population,
-0 = off), `immigrants` (0.1).
+`refine` (0.3), `refine_radius` (0.1), `guarded_add` (true), `seed_nn` (0.4).
 
 ### `stop` additions
 
-`min_generations` (100); defaults change: `stagnation_window` 50, `stagnation_delta` 1e-3
-(relative to archive HV).
+`min_generations` (100); defaults change: `stagnation_window` 50, `stagnation_delta` 1e-3.
 
 ### `output` additions / changes
 
-`top_k`: `usize | "auto"`; `rank_by`: `quality | ideal` (quality); `dedupe_overlap` (0.5);
-`dedupe_shape` (0.3); `labels` (true). `dedupe_jaccard` kept for `rank_by: ideal`.
+`top_k`: `usize | "auto"`; `dedupe_overlap` (0.5); `dedupe_shape` (0.3); `labels` (true). Motifs
+are always ranked by quality.
 
 ### `distance.kind`
 
@@ -56,15 +55,14 @@ built once per run; `nearest_outsider(proto, l, taken, ctx) -> Option<(f64, Segm
 |---|---|---|
 | `support`, `cohesion`, `mean_len`, `stretch` | as today | |
 | `extent` | f64 | quantile of LOO member distances |
-| `outsider` | f64 | nearest-outsider distance |
-| `margin` | f64 | normalised |
-| `coverage` | f64 | |
-| `quality` | f64 | `coverage · max(margin, 0)` |
-| `member` | `Vec<f64>` | LOO distance per occurrence (labelling weights, refinement) |
+| `outsider` | f64 | nearest-outsider distance (= extent when none exists) |
+| `scale` | f64 | δ(L*) |
+| `margin` | f64 | relative: `(outsider − extent) / max(outsider, extent)` ∈ [−1, 1] |
+| `coverage` | f64 | `Σ len / n` |
+| `quality` | f64 | `√coverage · max(margin, 0) · max(1 − extent/scale, 0)` (research R2) |
 
-### `Archive` (`crates/core/src/archive.rs`)
-
-`Vec<Individual>` bounded; `insert(ind)`, `hv()`, `members()`.
+Member distances are not stored in `Raw` (it would allocate per evaluation): `fitness::members`
+recomputes them on demand (refinement, labelling weights) into `Scratch`.
 
 ### `Motif` (output) additions
 

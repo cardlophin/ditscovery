@@ -41,6 +41,19 @@ fn ga(c: &mut Criterion) {
     g.finish();
 }
 
+// SC-005: library defaults (stagnation, min_generations, all v2 components) at 5k and 20k points.
+fn v2(c: &mut Criterion) {
+    let mut g = c.benchmark_group("ga");
+    g.sample_size(10).measurement_time(Duration::from_secs(30));
+    for (name, n) in [("v2_defaults_5k", 5_000), ("v2_defaults_20k", 20_000)] {
+        let (x, _) = synth::planted(n, &[60, 80, 100], 8, 0.3, 0.1, 0);
+        let o = [("min_len", json!(40)), ("max_len", json!(135)), ("max_stretch", json!(2.0))];
+        let cfg = Config::build(None, None, &o.map(|(k, v)| (k.to_string(), v))).unwrap();
+        g.bench_function(name, |b| b.iter(|| discover(x.clone(), &cfg, &AtomicBool::new(false))));
+    }
+    g.finish();
+}
+
 fn distance(c: &mut Criterion) {
     let (x, truth) = synth::planted(10_000, &[100], 20, 0.3, 0.1, 1);
     let segs: Vec<Segment> = truth[0].iter().map(|&(start, len)| Segment { start, len }).collect();
@@ -59,5 +72,5 @@ fn distance(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, ga, distance);
+criterion_group!(benches, ga, v2, distance);
 criterion_main!(benches);

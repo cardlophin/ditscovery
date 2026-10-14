@@ -52,9 +52,29 @@ def test_result_and_motif_attributes(series):
         assert m.support == len(m.occurrences)
         assert m.cohesion >= 0 and m.stretch >= 1 and 20 <= m.mean_len <= 40
         assert len(m.objectives) == 3
+        assert m.extent >= 0 and 0 < m.coverage <= 1
+        assert 0 <= m.quality <= m.coverage**0.5 * max(m.margin, 0.0) + 1e-12
+        assert m.margin > 0 or m.quality == 0
     assert all(m.aligned is None for m in res.front)
     keys = {"gen", "elapsed_s", "evals", "hv", "front_size", "best", "mean", "front"}
     assert res.history and keys <= set(res.history[0])
+
+
+def test_labels_cover_the_series_without_conflicts(series, tmp_path):
+    res = ds.discover(series, **FAST)
+    assert isinstance(res.labels, np.ndarray) and len(res.labels) == len(series)
+    for i, m in enumerate(res.motifs):
+        for s, n in m.occurrences:
+            assert (res.labels[s : s + n] == i).all()
+    assert set(np.unique(res.labels)) <= {-1, *range(len(res.motifs))}
+    res.save(tmp_path / "r")
+    np.testing.assert_array_equal(ds.load(tmp_path / "r").labels, res.labels)
+    assert ds.discover(series, labels=False, **FAST).labels is None
+
+
+def test_top_k_auto_returns_only_closed_motifs(series):
+    res = ds.discover(series, top_k="auto", **FAST)
+    assert all(m.margin > 0 for m in res.motifs)
 
 
 def test_top_k_motifs_are_distinct(series):

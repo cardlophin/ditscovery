@@ -1,5 +1,5 @@
 use ditscover_core::config::Config;
-use ditscover_core::motif::{Ctx, Scratch, Segment};
+use ditscover_core::motif::{Ctx, Scratch, Segment, evaluate};
 use ditscover_core::ops;
 use proptest::prelude::*;
 use rand::{Rng, SeedableRng};
@@ -43,10 +43,7 @@ fn check(segs: &[Segment], ctx: &Ctx, cfg: &Config) -> Result<(), TestCaseError>
     for s in segs {
         prop_assert!(s.len >= m.min_len && s.len <= m.max_len, "len {s:?}");
         prop_assert!(s.end() as usize <= N, "out of series {s:?}");
-        prop_assert!(
-            ctx.stats.mean_std(s.start as usize, s.len as usize).1 >= m.min_std,
-            "flat {s:?}"
-        );
+        prop_assert!(!ctx.is_flat(s), "flat {s:?}");
     }
     for w in segs.windows(2) {
         prop_assert!(w[0].end() + m.min_gap <= w[1].start, "overlap {w:?}");
@@ -90,6 +87,15 @@ proptest! {
         let (e, f) = ops::vary(&a, &b, ga, &ctx, &mut s, &mut rng);
         check(&e, &ctx, &cfg)?;
         check(&f, &ctx, &cfg)?;
+        check(&ops::refine(&a, &ctx, &mut s), &ctx, &cfg)?;
+        for seed in ops::nn_seeds(&ctx, 3) {
+            if let Some(set) = ops::grow(seed, &ctx, &mut s, &mut rng) {
+                check(&set, &ctx, &cfg)?;
+            }
+        }
+        let extent = |set: &[Segment], s: &mut Scratch| evaluate(set, &ctx, s).extent;
+        let added = ops::add(&a, &ctx, &mut s, &mut rng);
+        prop_assert!(extent(&added, &mut s) <= extent(&a, &mut s) + 1e-12, "guarded add grew the extent");
         let garbage: Vec<Segment> = (0..rng.random_range(0..30))
             .map(|_| Segment { start: rng.random_range(0..N as u32 + 50), len: rng.random_range(0..200) })
             .collect();

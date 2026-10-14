@@ -1,6 +1,7 @@
 import functools
 import importlib
 import inspect
+import itertools
 import math
 import os
 from importlib.metadata import PackageNotFoundError, version
@@ -24,10 +25,16 @@ def ditscover(x, min_len, max_len, k, seed=None, **params):
     return [m.occurrences for m in res.motifs]
 
 
-def locomotif(x, min_len, max_len, k, seed=None, rho=0.8, warping=True, overlap=0.0):
+# highpass: subtract a moving average of width 2·max_len (LoCoMotif compares raw levels).
+def locomotif(
+    x, min_len, max_len, k, seed=None, rho=0.8, warping=True, overlap=0.0, highpass=False
+):
     _need(x, max_len, "locomotif")
     from locomotif.locomotif import apply_locomotif
 
+    if highpass:
+        w = 2 * max_len
+        x = x - np.convolve(np.pad(x, w // 2, mode="edge"), np.ones(w) / w, mode="valid")[: len(x)]
     z = ((x - x.mean()) / x.std()).reshape(-1, 1)
     found = apply_locomotif(z, min_len, max_len, rho=rho, nb=k, overlap=overlap, warping=warping)
     return [sorted((int(b), int(e - b)) for b, e in occ) for _, occ in found]
@@ -46,14 +53,24 @@ def _stumpy():
     return stumpy
 
 
-def stomp(x, min_len, max_len, k, seed=None, lengths=None, max_matches=20):
+# cutoff=inf: stumpy's default cut-off on the matrix profile otherwise caps the number of motifs.
+def stomp(
+    x, min_len, max_len, k, seed=None, lengths=None, max_matches=20, cutoff=None, max_distance=None
+):
     _need(x, max_len, "stomp")
     stumpy = _stumpy()
 
     candidates = []
     for m in lengths or [round((min_len + max_len) / 2)]:
         mp = stumpy.stump(x, m)
-        dist, idx = stumpy.motifs(x, mp[:, 0].astype(float), max_motifs=k, max_matches=max_matches)
+        dist, idx = stumpy.motifs(
+            x,
+            mp[:, 0].astype(float),
+            max_motifs=k,
+            max_matches=max_matches,
+            cutoff=np.inf if cutoff is None else cutoff,
+            max_distance=max_distance,
+        )
         for d, i in zip(dist, idx, strict=True):
             keep = ~np.isnan(d) & (i >= 0)
             if keep.sum() >= 2:
@@ -97,24 +114,34 @@ def versions(specs):
     return {s["method"]: _version(s["method"]) for s in specs}
 
 
+def combos(grid):
+    keys = list(grid or {})
+    return [dict(zip(keys, v, strict=True)) for v in itertools.product(*(grid[k] for k in keys))]
+
+
 def check(specs):
-    known, _ = registry()
     for s in specs:
-        name, params = s["method"], s.get("params") or {}
-        if name not in known:
-            raise ValueError(f"method `{name}`: unknown (available: {', '.join(known)})")
-        if name in PACKAGES:
-            try:
-                importlib.import_module(PACKAGES[name][0])
-            except ImportError as e:
-                raise RuntimeError(f"method `{name}` needs {PACKAGES[name][1]}: {EXTRA}") from e
-        if name == "ditscover":
-            _core.build_config(None, None, {"min_len": 1, "max_len": 1, **params}, None)
-            continue
+        for combo in combos(s.get("grid")):
+            _check(s | {"params": (s.get("params") or {}) | combo})
+
+
+def _check(s):
+    known, _ = registry()
+    name, params = s["method"], s.get("params") or {}
+    if name not in known:
+        raise ValueError(f"method `{name}`: unknown (available: {', '.join(known)})")
+    if name in PACKAGES:
         try:
-            inspect.signature(known[name]).bind(None, 1, 1, 1, None, **params)
-        except TypeError as e:
-            raise ValueError(f"method `{s.get('label', name)}` params: {e}") from e
+            importlib.import_module(PACKAGES[name][0])
+        except ImportError as e:
+            raise RuntimeError(f"method `{name}` needs {PACKAGES[name][1]}: {EXTRA}") from e
+    if name == "ditscover":
+        _core.build_config(None, None, {"min_len": 1, "max_len": 1, **params}, None)
+        return
+    try:
+        inspect.signature(known[name]).bind(None, 1, 1, 1, None, **params)
+    except TypeError as e:
+        raise ValueError(f"method `{s.get('label', name)}` params: {e}") from e
 
 
 def run(name, x, min_len, max_len, k, seed, params):

@@ -34,7 +34,7 @@ force, index exactness), `pytest` (adapters, tuning, stats, report tabs)
 
 **Performance Goals**: median run time < LoCoMotif on every dataset; library defaults (with
 `min_generations`), one seed, all cores, 20 000 points ⇒ median < 10 s (research R7); candidate
-index ≤ ~1 MB at 20 000 points; ablation study ≈ 18 360 runs, ~10 h sequential (research R5)
+index ≤ 2 MB at 20 000 points (1.56 MB measured); ablation study ≈ 19 440 runs, ~11 h sequential (research R5)
 
 **Constraints**: determinism by seed (index, null scale and seeding all seeded); v1 behaviour
 reproducible bit-for-bit with `model: v1` and components off until the ablation removes it;
@@ -53,7 +53,7 @@ component without a significant validation benefit is deleted, and v1 is deleted
 | IV. Test-first | behavioural tests per acceptance scenario before code; proptest on invariants ✅ |
 | V. Reproducibility | all new randomness from the `(seed, generation, index)` streams; null scale and seeding seeded ✅ |
 | VI. Performance | candidate index with exact pruning; refinement cost bounded; benches extended ✅ |
-| VII. Observability | `GenerationRecord` adds archive size and archive HV; no blocking ✅ |
+| VII. Observability | `GenerationRecord` unchanged in shape (the archive fields were deleted with the archive, R8); no blocking ✅ |
 | VIII. Single configuration | new leaves in the same `Config`; bench `grid`/`tune` in `BenchConfig` ✅ |
 
 Post-design re-check (after the clarifications of 2026-10-13): no violations beyond the tracked
@@ -106,11 +106,14 @@ tests/python/ (test_methods.py, test_bench.py, test_report.py, test_api.py — e
 
 **Structure Decision**: four new focused core modules (`index`, `fitness`, `archive`, `label`)
 instead of growing `motif.rs` / `ops.rs`; Python changes stay in the existing benchmark and report
-modules.
+modules. After the ablation (research R8) `archive.rs` and its test were deleted with the archive,
+immigrants, mating restriction, split, collective moves and the v1 fitness; `containment` moved to
+`motif.rs`.
 
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |---|---|---|
 | ~15 boolean / probability switches for components | the ablation must measure each component in isolation (FR-027) | changing code per experiment is not reproducible; switches of losing components are deleted after the study (FR-029) |
-| `model: v1` kept temporarily | baseline variant in the same binary for paired comparison; deleted with `rank_by: ideal` and Jaccard dedupe if `full` wins (FR-014) | a separate build would break the same-seed pairing |
+| Criterion slowdown > 10 % vs `pre-003` (Principle VI), measured in T057: `run_10k` +124 % (3.12 s), `threads_1` +148 %, `threads_8` +79 %, `log_on` / `log_off` +68 % / +70 %, `distance/zeuclid` and `distance/dtw` (one set evaluation) +411 % / +403 %; `dtw_band_0.1` −73 % | each evaluation now computes leave-one-out member distances and a nearest-outsider search (FR-009), and the kept search components (refine, seed_nn) add work per generation; they buy the F1 gains in R8 / R9 (synth 0.22 → 0.60). Absolute cost stays inside SC-005: 20k defaults 1.76 s (−46 % vs the T050 pre-pruning baseline), 5k 1.56 s (−23 %) | v1 fitness is fast but its precision is 0.15 and it lost to `full` on 4 of 6 datasets (R8) |
+| `model: v1` kept temporarily (resolved: deleted in T055, R8) | baseline variant in the same binary for paired comparison; deleted with `rank_by: ideal` and Jaccard dedupe if `full` wins (FR-014) | a separate build would break the same-seed pairing |

@@ -1,10 +1,17 @@
 use crate::config::Ga;
-use crate::motif::{Ctx, Scratch, Segment, dist_to_proto, prototype};
+use crate::fitness::{extent_of, member_distances};
+use crate::index::{Level, PAA, clash, coarse_fine, nearest_outsider, paa};
+use crate::motif::{Ctx, Scratch, Segment, dist_to_proto, evaluate, load, prototype, target_len};
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
+use rayon::prelude::*;
 
 const INIT_ATTEMPTS: usize = 20;
 const ADD_ATTEMPTS: usize = 3;
+const REFINE_PASSES: usize = 4;
+// Refinement compares occurrences resampled to at most this many points.
+const REFINE_RES: usize = 128;
+const NN_QUERIES: usize = 256;
 
 fn fit(start: i64, len: i64, ctx: &Ctx) -> Segment {
     let m = ctx.motif();
@@ -227,6 +234,15 @@ pub fn init(
     })
 }
 
+fn guarded(ctx: &Ctx) -> bool {
+    ctx.cfg.ga.guarded_add
+}
+
+fn chance(p: f64, rng: &mut impl Rng) -> bool {
+    p > 0.0 && rng.random_bool(p)
+}
+
+// Guarded: a donated occurrence must be within the receiver's extent of its prototype.
 fn donate(
     a: &[Segment],
     b: &[Segment],
@@ -234,8 +250,13 @@ fn donate(
     s: &mut Scratch,
     rng: &mut impl Rng,
 ) -> Vec<Segment> {
-    let l = prototype(a, ctx, s);
-    let limit = a.iter().map(|g| dist_to_proto(g, l, ctx, s)).fold(0.0, f64::max);
+    let (l, limit) = match guarded(ctx) {
+        true => extent_of(a, ctx, s),
+        false => {
+            let l = prototype(a, ctx, s);
+            (l, a.iter().map(|g| dist_to_proto(g, l, ctx, s)).fold(0.0, f64::max))
+        }
+    };
     let mut union = a.to_vec();
     union.extend(b.iter().filter(|g| dist_to_proto(g, l, ctx, s) <= limit));
     repair(union, a, ctx, s, rng).unwrap_or_else(|| a.to_vec())
@@ -283,25 +304,46 @@ pub fn stretch(
     repair(out, segs, ctx, s, rng).unwrap_or_else(|| segs.to_vec())
 }
 
+// Guarded: the nearest outsider joins only if the extent does not grow.
 pub fn add(segs: &[Segment], ctx: &Ctx, s: &mut Scratch, rng: &mut impl Rng) -> Vec<Segment> {
     let mut out = segs.to_vec();
-    if out.len() < ctx.motif().max_occ as usize {
+    if out.len() >= ctx.motif().max_occ as usize {
+        return out;
+    }
+    if !guarded(ctx) {
         let l = prototype(segs, ctx, s);
         let limit = segs.iter().map(|g| dist_to_proto(g, l, ctx, s)).fold(0.0, f64::max);
         try_add(&mut out, l, Some(limit), ctx, s, rng);
+        return out;
     }
-    out
+    let (l, before) = extent_of(segs, ctx, s);
+    let Some((_, g)) = nearest_outsider(ctx, l, segs, s) else { return out };
+    out.insert(out.partition_point(|h| h.start < g.start), g);
+    match repair(out, segs, ctx, s, rng) {
+        Some(o) if extent_of(&o, ctx, s).1 <= before => o,
+        _ => segs.to_vec(),
+    }
 }
 
+// Guarded: drops the worst member, kept only if the margin grows.
 pub fn remove(segs: &[Segment], ctx: &Ctx, s: &mut Scratch, rng: &mut impl Rng) -> Vec<Segment> {
     let mut out = segs.to_vec();
-    if out.len() > ctx.motif().min_occ as usize {
-        let i = match rng.random_bool(0.5) {
-            true => worst(segs, prototype(segs, ctx, s), ctx, s),
-            false => rng.random_range(0..segs.len()),
-        };
-        out.remove(i);
+    if out.len() <= ctx.motif().min_occ as usize {
+        return out;
     }
+    if guarded(ctx) {
+        member_distances(segs, ctx, s);
+        let d = &s.member[..segs.len()];
+        let i = (0..d.len()).max_by(|&a, &b| d[a].total_cmp(&d[b]).then(b.cmp(&a))).unwrap_or(0);
+        let before = evaluate(segs, ctx, s).margin;
+        out.remove(i);
+        return if evaluate(&out, ctx, s).margin > before { out } else { segs.to_vec() };
+    }
+    let i = match rng.random_bool(0.5) {
+        true => worst(segs, prototype(segs, ctx, s), ctx, s),
+        false => rng.random_range(0..segs.len()),
+    };
+    out.remove(i);
     out
 }
 
@@ -324,6 +366,9 @@ fn mutate(
     if rng.random_bool(ga.remove) {
         segs = remove(&segs, ctx, s, rng);
     }
+    if chance(ga.refine, rng) {
+        segs = refine(&segs, ctx, s);
+    }
     segs
 }
 
@@ -340,4 +385,228 @@ pub fn vary(
         false => (a.to_vec(), b.to_vec()),
     };
     (mutate(c, ga, ctx, s, rng), mutate(d, ga, ctx, s, rng))
+}
+
+fn others_mean(out: &[Segment], i: usize, l: usize, ctx: &Ctx, s: &mut Scratch) {
+    let k = out.len() as f64;
+    load(&out[i], ctx, &mut s.v[..l]);
+    for j in 0..l {
+        s.proto[j] = (s.alt[j] - s.v[j]) / (k - 1.0);
+    }
+}
+
+fn admissible(g: &Segment, i: usize, out: &[Segment], ctx: &Ctx) -> bool {
+    let m = ctx.motif();
+    let (lo, hi) = out
+        .iter()
+        .enumerate()
+        .filter(|p| p.0 != i)
+        .fold((u32::MAX, 0), |(a, b), (_, h)| (a.min(h.len), b.max(h.len)));
+    let fits = g.len >= m.min_len && g.len <= m.max_len && g.end() as usize <= ctx.n();
+    let stretch = g.len.max(hi) as f64 <= g.len.min(lo) as f64 * m.max_stretch + 1e-9;
+    let gap = m.min_gap;
+    let hit =
+        |(j, h): (usize, &Segment)| j != i && g.start < h.end() + gap && h.start < g.end() + gap;
+    fits && stretch && !ctx.is_flat(g) && !out.iter().enumerate().any(hit)
+}
+
+// (start, len, offset) -> moved (start, len)
+type Move = fn(i64, i64, i64) -> (i64, i64);
+
+// Best start (fixed length), or best length with the start, the end or the centre fixed; each
+// family of moves is searched coarse-to-fine over offsets in [-r, r].
+fn best_move(
+    i: usize,
+    out: &[Segment],
+    resize: bool,
+    l: usize,
+    ctx: &Ctx,
+    s: &mut Scratch,
+) -> Segment {
+    let cur = out[i];
+    let r = (ctx.cfg.ga.refine_radius * cur.len as f64).ceil() as i64;
+    let mut best = (dist_to_proto(&cur, l, ctx, s), cur);
+    let (start, len) = (cur.start as i64, cur.len as i64);
+    let families: &[Move] = match resize {
+        false => &[|st, ln, d| (st + d, ln)],
+        true => &[
+            |st, ln, d| (st, ln + d),
+            |st, ln, d| (st - d, ln + d),
+            |st, ln, d| (st - d / 2, ln + d),
+        ],
+    };
+    for family in families {
+        let seg = |d: i64| {
+            let (st, ln) = family(start, len, d);
+            (st >= 0 && ln > 0).then_some(Segment { start: st as u32, len: ln as u32 })
+        };
+        let found = coarse_fine(-r, r, |d| {
+            let g = seg(d).filter(|g| *g != cur && admissible(g, i, out, ctx))?;
+            Some(dist_to_proto(&g, l, ctx, s))
+        });
+        if let Some((dist, d)) = found
+            && dist < best.0
+        {
+            best = (dist, seg(d).expect("admissible move"));
+        }
+    }
+    best.1
+}
+
+fn refine_pass(out: &mut [Segment], resize: bool, ctx: &Ctx, s: &mut Scratch) -> bool {
+    let l = target_len(out).min(REFINE_RES);
+    s.alt[..l].fill(0.0);
+    for g in out.iter() {
+        load(g, ctx, &mut s.v[..l]);
+        s.alt[..l].iter_mut().zip(&s.v[..l]).for_each(|(a, v)| *a += v);
+    }
+    let mut moved = false;
+    for i in 0..out.len() {
+        others_mean(out, i, l, ctx, s);
+        let g = best_move(i, out, resize, l, ctx, s);
+        if g != out[i] {
+            load(&out[i], ctx, &mut s.v[..l]);
+            s.alt[..l].iter_mut().zip(&s.v[..l]).for_each(|(a, v)| *a -= v);
+            load(&g, ctx, &mut s.v[..l]);
+            s.alt[..l].iter_mut().zip(&s.v[..l]).for_each(|(a, v)| *a += v);
+            (out[i], moved) = (g, true);
+        }
+    }
+    moved
+}
+
+fn spread(segs: &[Segment], ctx: &Ctx, s: &mut Scratch) -> f64 {
+    member_distances(segs, ctx, s);
+    s.member[..segs.len()].iter().map(|d| d * d).sum::<f64>() / segs.len() as f64
+}
+
+// Coordinate descent of every occurrence towards the mean of the others: starts first, lengths
+// once the starts settled (resizing against misaligned others shrinks every occurrence to a
+// consistent sub-window). Kept only if the mean squared member distance does not grow.
+pub fn refine(segs: &[Segment], ctx: &Ctx, s: &mut Scratch) -> Vec<Segment> {
+    if segs.len() < 2 {
+        return segs.to_vec();
+    }
+    let mut out = segs.to_vec();
+    for resize in [false, true] {
+        for _ in 0..REFINE_PASSES {
+            if !refine_pass(&mut out, resize, ctx, s) {
+                break;
+            }
+        }
+    }
+    out.sort();
+    if out != segs && spread(&out, ctx, s) <= spread(segs, ctx, s) { out } else { segs.to_vec() }
+}
+
+// Approximate nearest-neighbour distance of up to NN_QUERIES windows per level (sketch distance,
+// trivial matches excluded).
+fn level_nn(lev: &Level) -> Vec<(f32, Segment)> {
+    let w = lev.starts.len();
+    let step = (w / NN_QUERIES).max(1);
+    (0..w)
+        .step_by(step)
+        .collect::<Vec<_>>()
+        .par_iter()
+        .filter_map(|&q| {
+            let (sq, len) = (&lev.sketches[q], lev.len);
+            let start = lev.starts[q];
+            let best = (0..w)
+                .filter(|&j| lev.starts[j].abs_diff(start) >= len)
+                .map(|j| {
+                    sq.iter().zip(&lev.sketches[j]).map(|(a, b)| (a - b) * (a - b)).sum::<f32>()
+                })
+                .fold(f32::INFINITY, f32::min);
+            best.is_finite().then_some((best, Segment { start, len }))
+        })
+        .collect()
+}
+
+// Seed windows ranked by approximate nearest-neighbour distance, mutually non-overlapping.
+pub fn nn_seeds(ctx: &Ctx, count: usize) -> Vec<Segment> {
+    let m = ctx.motif();
+    let inside: Vec<&Level> =
+        ctx.index.levels.iter().filter(|l| l.len >= m.min_len && l.len <= m.max_len).collect();
+    let levels = if inside.is_empty() { ctx.index.levels.iter().collect() } else { inside };
+    let mut cands: Vec<(f32, Segment)> = levels.into_iter().flat_map(level_nn).collect();
+    cands.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut out: Vec<Segment> = Vec::new();
+    for (_, g) in cands {
+        if out.len() == count {
+            break;
+        }
+        if !clash(&out, &g, 0) {
+            out.push(g);
+        }
+    }
+    out
+}
+
+// Size cut at the largest relative jump of the sorted member distances.
+fn cut(d: &[f64], min_occ: usize) -> usize {
+    let m = d.len();
+    (min_occ.max(2)..=m)
+        .map(|size| (d[size - 1] / d[size - 2].max(1e-9), size))
+        .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)))
+        .map_or(m + 1, |p| p.1)
+}
+
+// Best step-1 position within half a stride of an indexed window (strided windows are misaligned
+// by up to stride/2, which would blur the distance jump between true and false members).
+fn aligned(
+    start: u32,
+    lev: &Level,
+    seed: Segment,
+    l: usize,
+    ctx: &Ctx,
+    s: &mut Scratch,
+) -> Option<(f64, Segment)> {
+    let half = (lev.stride / 2) as i64;
+    let last = (ctx.n() - lev.len as usize) as i64;
+    let (lo, hi) = ((start as i64 - half).max(0), (start as i64 + half).min(last));
+    let best = coarse_fine(lo, hi, |p| {
+        let g = Segment { start: p as u32, len: lev.len };
+        let bad = ctx.is_flat(&g) || clash(&[seed], &g, ctx.motif().min_gap);
+        (!bad).then(|| dist_to_proto(&g, l, ctx, s))
+    });
+    best.map(|(d, p)| (d, Segment { start: p as u32, len: lev.len }))
+}
+
+// A seed grown with its nearest non-overlapping windows, cut at the first large jump in distance.
+pub fn grow(seed: Segment, ctx: &Ctx, s: &mut Scratch, rng: &mut impl Rng) -> Option<Vec<Segment>> {
+    let m = ctx.motif();
+    let seed = fit(seed.start as i64, seed.len as i64, ctx);
+    let lev = ctx.index.level(seed.len as f64)?;
+    let l = prototype(&[seed], ctx, s);
+    let mut q = [0.0; PAA];
+    paa(&s.proto[..l], &mut q);
+    let mut ranked: Vec<(f64, u32)> = lev
+        .starts
+        .iter()
+        .zip(&lev.sketches)
+        .filter(|(st, _)| !clash(&[seed], &Segment { start: **st, len: lev.len }, m.min_gap))
+        .map(|(&st, sk)| (q.iter().zip(sk).map(|(a, b)| (a - *b as f64).powi(2)).sum::<f64>(), st))
+        .collect();
+    ranked.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut near: Vec<(f64, Segment)> = ranked
+        .iter()
+        .take(4 * m.max_occ as usize)
+        .filter_map(|&(_, start)| aligned(start, lev, seed, l, ctx, s))
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut set = vec![seed];
+    let mut dist = Vec::new();
+    for (d, g) in near {
+        if set.len() == m.max_occ as usize {
+            break;
+        }
+        if !clash(&set, &g, m.min_gap) {
+            set.push(g);
+            dist.push(d);
+        }
+    }
+    let size = cut(&dist, m.min_occ as usize).min(set.len());
+    set.truncate(size);
+    set.sort();
+    repair(set, &[seed], ctx, s, rng)
 }

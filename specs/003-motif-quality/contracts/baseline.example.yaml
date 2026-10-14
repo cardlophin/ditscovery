@@ -1,0 +1,26 @@
+# Corrected baseline (T019): previous ditscover (v1 + stretch fix) vs tuned baselines, test split.
+# Historical: produced results/bench-002 before v1 was deleted (T055); the v1 row needs that build.
+datasets:
+  - synthetic: {name: synth-varlen, n_series: 20, n: 5000, lens: [40, 60, 80], occ: 6, stretch: 0.3, noise: 0.1, seed: 0}
+  - tsmd: {name: ECG5000, split: test, n_series: 20}
+  - tsmd: {name: Fungi, split: test, n_series: 20}
+  - tsmd: {name: Plane, split: test, n_series: 20}
+  - tsmd: {name: Mallat, split: test, n_series: 20}
+  - tsmd: {name: Symbols, split: test, n_series: 20}
+
+tune: {n_series: 10, metric: f1}
+seeds: [0, 1, 2]
+k: oracle
+jobs: 4
+threads: 2
+stats: true
+save_sets: true
+
+methods:
+  - {method: ditscover, label: v1, params: {population: 200, max_generations: 300, model: v1, min_std_rel: 0, rank_by: ideal, refine: 0, phase: 0, rescale: 0, guarded_add: false, mating_tau: null, split: 0, seed_nn: 0, archive: 0, immigrants: 0, labels: false, min_generations: 0, stagnation_window: 30, stagnation_delta: 1.0e-4}}
+  - {method: stomp, grid: {max_matches: [5, 10, 20]}}
+  - {method: locomotif, grid: {rho: [0.5, 0.6, 0.7, 0.8], highpass: [false, true]}}
+
+scaling:
+  lengths: [1000, 2000, 5000, 10000, 20000]
+  repeats: 3

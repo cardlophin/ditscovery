@@ -1,4 +1,4 @@
-use ditscover_core::config::{Column, Config, Kind, validate_len};
+use ditscover_core::config::{Column, Config, Kind, TopK, validate_len};
 use ditscover_core::preprocess::{Fill, Step};
 use serde_json::{Value, json};
 
@@ -39,14 +39,65 @@ fn defaults() {
     assert_eq!([c.ga.init_greedy, c.ga.niche_jaccard], [0.5, 0.5]);
     assert_eq!(c.stop.max_generations, 300);
     assert_eq!(c.stop.time_budget_s, None);
-    assert_eq!(c.stop.stagnation_window, Some(30));
-    assert_eq!(c.stop.stagnation_delta, 1e-4);
+    assert_eq!(c.stop.stagnation_window, Some(50));
+    assert_eq!(c.stop.stagnation_delta, 1e-3);
     assert_eq!(c.output.dir, None);
-    assert_eq!((c.output.top_k, c.output.snapshot_every), (5, 10));
-    assert_eq!(c.output.dedupe_jaccard, 0.3);
+    assert_eq!((c.output.top_k, c.output.snapshot_every), (TopK::N(5), 10));
     assert_eq!(c.log.level, "info");
     assert_eq!((c.log.log_every, c.log.channel_capacity), (10, 1024));
     assert!(c.log.history);
+}
+
+#[test]
+fn motif_quality_defaults() {
+    let c = Config::default();
+    let f = &c.fitness;
+    assert_eq!((f.extent_q, f.null_pairs, f.cid, f.loo), (0.9, 256, false, true));
+    let g = &c.ga;
+    assert_eq!([g.refine, g.refine_radius, g.seed_nn], [0.3, 0.1, 0.4]);
+    assert!(g.guarded_add);
+    assert_eq!(c.stop.min_generations, 100);
+    let o = &c.output;
+    assert_eq!((o.dedupe_overlap, o.dedupe_shape), (0.5, 0.3));
+    assert!(o.labels);
+}
+
+#[test]
+fn motif_quality_overrides_and_validation() {
+    let mut o = base();
+    o.extend(ov(&[
+        ("refine", json!(0)),
+        ("top_k", json!("auto")),
+        ("kind", json!("zdtw")),
+        ("loo", json!(false)),
+        ("guarded_add", json!(false)),
+    ]));
+    let c = Config::build(None, None, &o).unwrap();
+    assert_eq!(c.ga.refine, 0.0);
+    assert_eq!(c.output.top_k, TopK::Auto);
+    assert_eq!(c.distance.kind, Kind::Zdtw);
+    assert!(!c.fitness.loo && !c.ga.guarded_add);
+    assert_eq!(Config::build(Some(&c.to_yaml()), None, &[]).unwrap(), c);
+    for removed in ["model", "rank_by", "dedupe_jaccard", "min_std_rel", "archive", "split"] {
+        let e = err(None, &[("min_len", json!(10)), ("max_len", json!(20)), (removed, json!(0))]);
+        assert!(e.contains("unknown parameter"), "{removed}: {e}");
+    }
+    let cases = [
+        ("extent_q", json!(0.0), "fitness.extent_q"),
+        ("null_pairs", json!(8), "fitness.null_pairs"),
+        ("refine", json!(1.5), "ga.refine"),
+        ("refine_radius", json!(0.0), "ga.refine_radius"),
+        ("seed_nn", json!(1.1), "ga.seed_nn"),
+        ("dedupe_overlap", json!(1.5), "output.dedupe_overlap"),
+        ("dedupe_shape", json!(-0.5), "output.dedupe_shape"),
+        ("top_k", json!("many"), "output.top_k"),
+    ];
+    for (k, v, path) in cases {
+        let e = err(None, &[("min_len", json!(10)), ("max_len", json!(20)), (k, v)]);
+        assert!(e.starts_with(path) || e.contains(k), "{k}: {e}");
+    }
+    let e = err(None, &[("min_len", json!(10)), ("max_len", json!(20)), ("refine", json!(1.5))]);
+    assert!(e.starts_with("ga.refine"), "{e}");
 }
 
 #[test]

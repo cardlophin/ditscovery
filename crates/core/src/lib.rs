@@ -3,7 +3,10 @@ pub mod config;
 pub mod distance;
 pub mod engine;
 pub mod events;
+pub mod fitness;
+pub mod index;
 pub mod io;
+pub mod label;
 pub mod metrics;
 pub mod motif;
 pub mod nsga;
@@ -79,10 +82,10 @@ pub fn discover_dated(
     let history = logger.join();
     let outcome = outcome?;
     let (motifs, front) = result::build(&outcome.pop, &ctx, &series);
-    let metrics = truth.map(|t| {
-        let found: Vec<_> = motifs.iter().map(|m| m.occurrences.clone()).collect();
-        metrics::prom(&found, &t.sets, cfg.eval.average, cfg.eval.off_target)
-    });
+    let found: Vec<_> = motifs.iter().map(|m| m.occurrences.clone()).collect();
+    let metrics =
+        truth.map(|t| metrics::prom(&found, &t.sets, cfg.eval.average, cfg.eval.off_target));
+    let labels = cfg.output.labels.then(|| label::labels(values.len(), &found));
     let res = RunResult {
         motifs,
         front,
@@ -96,6 +99,7 @@ pub fn discover_dated(
         series: values,
         metrics,
         timestamps,
+        labels,
     };
     if let Some(dir) = &cfg.output.dir {
         res.save(dir)?;

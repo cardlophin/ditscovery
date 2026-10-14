@@ -1,4 +1,4 @@
-use ditscover_core::bench::{BenchConfig, DatasetSpec, K, TsmdName};
+use ditscover_core::bench::{BenchConfig, DatasetSpec, K, Split, TsmdName};
 use serde_json::{Value, json};
 
 fn example() -> String {
@@ -63,6 +63,51 @@ fn errors_carry_key_path() {
         (ds("{yfinance: {name: y, tickers: [A], period: 1y, min_len: 5, max_len: 9, k: 0}}"), "datasets[0].k"),
         (format!("{MINIMAL}k: 0\n"), "k"),
         (format!("{MINIMAL}timeout_s: 0\n"), "timeout_s"),
+    ];
+    for (yaml, key) in cases {
+        let e = build(&yaml, &[]).unwrap_err();
+        assert!(e.contains(key), "{key}: {e}");
+    }
+}
+
+#[test]
+fn tuning_fields_parse_and_validate() {
+    let yaml = "datasets: [{synthetic: {name: s, split: validation}}, {synthetic: {name: s}}, \
+                {tsmd: {name: ECG5000, split: validation, n_series: 30}}, \
+                {tsmd: {name: ECG5000, n_series: 30}}]\n\
+                methods: [{method: locomotif, grid: {rho: [0.5, 0.6], highpass: [false, true]}}]\n\
+                tune: {n_series: 4}\nmax_runs: 500\nstats: false\nsave_sets: false\n";
+    let c = build(yaml, &[]).unwrap();
+    let t = c.tune.clone().unwrap();
+    assert_eq!((t.n_series, t.metric.as_str()), (4, "f1"));
+    assert_eq!((c.max_runs, c.stats, c.save_sets), (500, false, false));
+    assert_eq!(c.methods[0].grid["rho"], json!([0.5, 0.6]));
+    let DatasetSpec::Synthetic(s) = &c.datasets[0] else { panic!("synthetic") };
+    assert_eq!(s.split, Split::Validation);
+    let DatasetSpec::Synthetic(s) = &c.datasets[1] else { panic!("synthetic") };
+    assert_eq!(s.split, Split::Test);
+    assert_eq!(build(&c.to_yaml(), &[]).unwrap(), c);
+    let d = build(MINIMAL, &[]).unwrap();
+    assert_eq!((d.tune, d.max_runs, d.stats, d.save_sets), (None, 20_000, true, true));
+    assert!(d.methods[0].grid.is_empty());
+}
+
+#[test]
+fn tuning_errors_carry_key_path() {
+    let ds = |d: &str| format!("datasets: [{d}]\nmethods: [{{method: ditscover}}]\n");
+    let grid = "datasets: [{synthetic: {name: s}}]\nmethods: [{method: stomp, grid: {max_matches: [10]}}]\n";
+    let cases = [
+        (ds("{synthetic: {name: s}}, {synthetic: {name: s, split: test}}"), "datasets[1].name"),
+        (ds("{tsmd: {name: Fungi}}, {tsmd: {name: Fungi, split: test}}"), "datasets[1].name"),
+        (grid.into(), "methods[0].grid"),
+        (format!("{grid}tune: {{n_series: 2}}\nmax_runs: 0\n"), "max_runs"),
+        (format!("{grid}tune: {{n_series: 0}}\n"), "tune.n_series"),
+        (format!("{grid}tune: {{n_series: 2, metric: auc}}\n"), "tune.metric"),
+        (
+            "datasets: [{synthetic: {name: s}}]\nmethods: [{method: stomp, grid: {max_matches: []}}]\ntune: {n_series: 2}\n"
+                .into(),
+            "methods[0].grid.max_matches",
+        ),
     ];
     for (yaml, key) in cases {
         let e = build(&yaml, &[]).unwrap_err();

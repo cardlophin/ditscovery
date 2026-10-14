@@ -4,22 +4,15 @@ preprocess: [{nan: interpolate}, {detrend: linear}, {normalize: zscore}]
 motif: {min_len: 9, max_len: 15, max_stretch: 1.3, min_occ: 3, max_occ: 30}
 distance: {kind: zeuclid}            # zeuclid | euclid | dtw | zdtw
 fitness:
-  model: v2
   extent_q: 0.9
   null_pairs: 256
-  min_std_rel: 0.05
   cid: false
+  loo: true
 ga:
   population: 200
   refine: 0.3
   refine_radius: 0.1
-  phase: 0.2
-  rescale: 0.15
   guarded_add: true
-  mating_tau: 0.5
-  split: 0.05
   seed_nn: 0.4
-  archive: null                      # null = 2·population, 0 = off
-  immigrants: 0.1
 stop: {max_generations: 500, min_generations: 100, stagnation_window: 50, stagnation_delta: 1.0e-3}
-output: {dir: results/electric-v2, top_k: auto, rank_by: quality, dedupe_overlap: 0.5, dedupe_shape: 0.3, labels: true}
+output: {dir: results/electric-v2, top_k: auto, dedupe_overlap: 0.5, dedupe_shape: 0.3, labels: true}

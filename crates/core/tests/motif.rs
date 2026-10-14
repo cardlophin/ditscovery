@@ -1,5 +1,6 @@
 use ditscover_core::config::Config;
-use ditscover_core::motif::{Ctx, Scratch, Segment, align, evaluate, jaccard, objectives};
+use ditscover_core::fitness::objectives;
+use ditscover_core::motif::{Ctx, Scratch, Segment, align, evaluate, jaccard};
 use serde_json::json;
 
 fn seg(start: u32, len: u32) -> Segment {
@@ -29,15 +30,18 @@ fn prototype_is_mean_of_resampled_occurrences() {
 
 #[test]
 fn raw_and_normalised_objectives() {
-    let c = cfg("euclid");
+    let o = [("min_len", json!(3)), ("max_len", json!(8)), ("kind", json!("euclid"))];
+    let c = Config::build(None, None, &o.map(|(k, v)| (k.to_string(), v))).unwrap();
     let ctx = Ctx::new(&X, &c);
     let raw = evaluate(&[seg(0, 4), seg(10, 6)], &ctx, &mut Scratch::new(8));
-    let d = (0.46875f64 / 5.0).sqrt();
+    // Two members: each one's leave-one-out prototype is the other occurrence.
+    let d = (0.46875f64 * 4.0 / 5.0).sqrt();
     assert_eq!(raw.support, 2);
     assert!((raw.cohesion - d).abs() < 1e-9, "{}", raw.cohesion);
+    assert!((raw.extent - d).abs() < 1e-9, "{}", raw.extent);
     assert_eq!((raw.mean_len, raw.stretch), (5.0, 1.5));
-    let obj = objectives(&raw, &c.motif, 0.5);
-    assert!(close(&obj, &[1.0, d / 0.5, 0.6]), "{obj:?}");
+    let obj = objectives(&raw, &ctx, 2.0 * d);
+    assert!(close(&obj, &[1.0, 1.0 / 3.0, 1.0 / 3.0]), "{obj:?}");
 }
 
 #[test]

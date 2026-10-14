@@ -35,6 +35,41 @@ pub enum Kind {
     Zeuclid,
     Euclid,
     Dtw,
+    Zdtw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "TopKRaw", into = "TopKRaw")]
+pub enum TopK {
+    N(usize),
+    Auto,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum TopKRaw {
+    N(usize),
+    S(String),
+}
+
+impl TryFrom<TopKRaw> for TopK {
+    type Error = String;
+    fn try_from(k: TopKRaw) -> Result<Self, String> {
+        match k {
+            TopKRaw::N(n) => Ok(TopK::N(n)),
+            TopKRaw::S(s) if s == "auto" => Ok(TopK::Auto),
+            TopKRaw::S(s) => Err(format!("top_k: expected `auto` or a number, got `{s}`")),
+        }
+    }
+}
+
+impl From<TopK> for TopKRaw {
+    fn from(k: TopK) -> Self {
+        match k {
+            TopK::N(n) => TopKRaw::N(n),
+            TopK::Auto => TopKRaw::S("auto".into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -45,6 +80,7 @@ pub struct Config {
     pub preprocess: Vec<Step>,
     pub motif: MotifCfg,
     pub distance: DistanceCfg,
+    pub fitness: Fitness,
     pub ga: Ga,
     pub stop: Stop,
     pub output: Output,
@@ -101,6 +137,15 @@ pub struct DistanceCfg {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
+pub struct Fitness {
+    pub extent_q: f64,
+    pub null_pairs: u32,
+    pub cid: bool,
+    pub loo: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
 pub struct Ga {
     pub population: u32,
     pub crossover: f64,
@@ -113,12 +158,17 @@ pub struct Ga {
     pub scan_step: f64,
     pub init_greedy: f64,
     pub niche_jaccard: f64,
+    pub refine: f64,
+    pub refine_radius: f64,
+    pub guarded_add: bool,
+    pub seed_nn: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Stop {
     pub max_generations: u32,
+    pub min_generations: u32,
     pub time_budget_s: Option<f64>,
     pub stagnation_window: Option<u32>,
     pub stagnation_delta: f64,
@@ -128,8 +178,10 @@ pub struct Stop {
 #[serde(deny_unknown_fields, default)]
 pub struct Output {
     pub dir: Option<PathBuf>,
-    pub top_k: usize,
-    pub dedupe_jaccard: f64,
+    pub top_k: TopK,
+    pub dedupe_overlap: f64,
+    pub dedupe_shape: f64,
+    pub labels: bool,
     pub snapshot_every: u32,
 }
 
@@ -195,7 +247,17 @@ impl Default for Ga {
             scan_step: 0.125,
             init_greedy: 0.5,
             niche_jaccard: 0.5,
+            refine: 0.3,
+            refine_radius: 0.1,
+            guarded_add: true,
+            seed_nn: 0.4,
         }
+    }
+}
+
+impl Default for Fitness {
+    fn default() -> Self {
+        Self { extent_q: 0.9, null_pairs: 256, cid: false, loo: true }
     }
 }
 
@@ -203,16 +265,24 @@ impl Default for Stop {
     fn default() -> Self {
         Self {
             max_generations: 300,
+            min_generations: 100,
             time_budget_s: None,
-            stagnation_window: Some(30),
-            stagnation_delta: 1e-4,
+            stagnation_window: Some(50),
+            stagnation_delta: 1e-3,
         }
     }
 }
 
 impl Default for Output {
     fn default() -> Self {
-        Self { dir: None, top_k: 5, dedupe_jaccard: 0.3, snapshot_every: 10 }
+        Self {
+            dir: None,
+            top_k: TopK::N(5),
+            dedupe_overlap: 0.5,
+            dedupe_shape: 0.3,
+            labels: true,
+            snapshot_every: 10,
+        }
     }
 }
 
@@ -228,6 +298,7 @@ impl DistanceCfg {
             Kind::Zeuclid => Distance::ZEuclid,
             Kind::Euclid => Distance::Euclid,
             Kind::Dtw => Distance::Dtw { band: self.band },
+            Kind::Zdtw => Distance::ZDtw { band: self.band },
         }
     }
 }
@@ -315,9 +386,17 @@ impl Config {
             (g.remove, "remove"),
             (g.init_greedy, "init_greedy"),
             (g.niche_jaccard, "niche_jaccard"),
+            (g.refine, "refine"),
+            (g.seed_nn, "seed_nn"),
         ] {
             check(unit(v), &format!("ga.{k}"), "must be in [0, 1]")?;
         }
+        let r = g.refine_radius;
+        check(r > 0.0 && r <= 0.5, "ga.refine_radius", "must be in (0, 0.5]")?;
+        let f = &self.fitness;
+        let q = f.extent_q;
+        check(q > 0.0 && q <= 1.0, "fitness.extent_q", "must be in (0, 1]")?;
+        check(f.null_pairs >= 16, "fitness.null_pairs", "must be >= 16")?;
         check(g.sigma_shift >= 0.0, "ga.sigma_shift", "must be >= 0")?;
         check(g.sigma_stretch >= 0.0, "ga.sigma_stretch", "must be >= 0")?;
         check(g.scan_step > 0.0 && g.scan_step <= 1.0, "ga.scan_step", "must be in (0, 1]")
@@ -331,8 +410,9 @@ impl Config {
         check(window, "stop.stagnation_window", "must be >= 1")?;
         check(s.stagnation_delta >= 0.0, "stop.stagnation_delta", "must be >= 0")?;
         let o = &self.output;
-        check(o.top_k >= 1, "output.top_k", "must be >= 1")?;
-        check(unit(o.dedupe_jaccard), "output.dedupe_jaccard", "must be in [0, 1]")?;
+        check(o.top_k != TopK::N(0), "output.top_k", "must be >= 1 or auto")?;
+        check(unit(o.dedupe_overlap), "output.dedupe_overlap", "must be in [0, 1]")?;
+        check(o.dedupe_shape >= 0.0, "output.dedupe_shape", "must be >= 0")?;
         check(o.snapshot_every >= 1, "output.snapshot_every", "must be >= 1")?;
         let l = &self.log;
         let level = ["error", "warn", "info", "debug", "trace"].contains(&l.level.as_str());

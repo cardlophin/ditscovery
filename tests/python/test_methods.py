@@ -55,6 +55,71 @@ def test_stomp_occurrences_of_a_set_do_not_overlap():
         assert all(s + n <= t for (s, n), (t, _) in zip(occ, occ[1:], strict=False)), occ
 
 
+def _planted_sine(starts, n=3000, width=60, seed=0):
+    rng = np.random.default_rng(seed)
+    x = rng.normal(0, 0.3, n)
+    for s in starts:
+        x[s : s + width] += 2 * np.sin(np.linspace(0, 4 * np.pi, width))
+    return x
+
+
+def _iou(a, b):
+    inter = max(0, min(a[0] + a[1], b[0] + b[1]) - max(a[0], b[0]))
+    return inter / (a[1] + b[1] - inter)
+
+
+def test_stomp_returns_several_sets_when_several_motifs_exist():
+    pytest.importorskip("stumpy")
+    x = _planted_sine((200, 900, 1700, 2500))
+    tri = 1.5 * (1 - np.abs(np.linspace(-1, 1, 60)) * 2)
+    for s in (500, 1300, 2100, 2800):
+        x[s : s + 60] += tri
+    sets = methods.run("stomp", x, 50, 70, 2, None, {"max_matches": 4})
+    assert sorted(sorted(s for s, _ in occ) for occ in sets) == [
+        [195, 895, 1695, 2495],
+        [500, 1300, 2100, 2800],
+    ], sets
+
+
+# TSMD-like: distinct shapes around the repeats (LoCoMotif matches flat or noisy background too).
+def test_locomotif_hits_a_planted_motif_with_matching_coordinates():
+    pytest.importorskip("locomotif")
+    rng, t = np.random.default_rng(0), np.linspace(0, 1, 60)
+    pieces, starts = [], []
+    for i in range(16):
+        if i % 4 == 1:
+            starts.append(60 * i)
+            pieces.append(2 * np.sin(4 * np.pi * t))
+        else:
+            f, ph, a = rng.uniform(0.3, 3), rng.uniform(0, 2 * np.pi), rng.uniform(0.5, 1.5)
+            pieces.append(2 * a * np.cos(2 * np.pi * f * t + ph) + rng.normal(0, 1))
+    x = np.concatenate(pieces) + rng.normal(0, 0.05, 960)
+    sets = methods.run("locomotif", x, 50, 70, 1, None, {})
+    assert sets
+    hits = [max(_iou(o, (s, 60)) for o in sets[0]) for s in starts]
+    assert sum(h > 0.5 for h in hits) >= 3, (sets, hits)
+
+
+def test_locomotif_highpass_removes_the_local_level():
+    pytest.importorskip("locomotif")
+    x = _planted_sine((200, 900, 1700, 2500)) + np.linspace(0, 30, 3000)
+    assert methods.run("locomotif", x, 50, 70, 1, None, {"highpass": True})
+
+
+def test_ditscover_gets_a_stretch_limit_covering_the_ground_truth(tmp_path):
+    from ditscover.bench import _method_params, datasets
+
+    files = ds.synthetic_suite(tmp_path, n_series=2, n=3000, lens=(40, 60), occ=4, stretch=0.3)
+    for s in datasets._series("syn", files):
+        gt = max(max(n for _, n in occ) / min(n for _, n in occ) for occ in s["sets"])
+        assert s["max_stretch"] >= gt * 1.1 - 1e-9
+        job = {"method": "ditscover", "params": {}, "s": s}
+        assert _method_params(job)["max_stretch"] == s["max_stretch"]
+        job = {"method": "ditscover", "params": {"max_stretch": 3.0}, "s": s}
+        assert _method_params(job)["max_stretch"] == 3.0
+        assert "max_stretch" not in _method_params({"method": "stomp", "params": {}, "s": s})
+
+
 @pytest.mark.parametrize("name", ["locomotif", "stomp"])
 def test_short_series_fail_with_a_reason(name):
     with pytest.raises(ValueError, match="shorter"):

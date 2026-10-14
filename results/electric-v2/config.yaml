@@ -1,0 +1,72 @@
+seed: 42
+data:
+  path: data/kaggle-electric-production.csv
+  column: IPG2211A2N
+  delimiter: ','
+  header: true
+  time_column: null
+  ticker: null
+  start: null
+  end: null
+  period: null
+  interval: 1d
+  field: Close
+  refresh: false
+preprocess:
+- nan: interpolate
+- detrend: linear
+- normalize: zscore
+motif:
+  min_len: 9
+  max_len: 15
+  max_stretch: 1.3
+  min_occ: 3
+  max_occ: 30
+  min_gap: 0
+  min_std: 1e-6
+distance:
+  kind: zeuclid
+  band: 0.1
+fitness:
+  extent_q: 0.9
+  null_pairs: 256
+  cid: false
+  loo: true
+ga:
+  population: 200
+  crossover: 0.9
+  shift: 0.3
+  stretch: 0.2
+  add: 0.2
+  remove: 0.1
+  sigma_shift: 0.1
+  sigma_stretch: 0.1
+  scan_step: 0.125
+  init_greedy: 0.5
+  niche_jaccard: 0.5
+  refine: 0.3
+  refine_radius: 0.1
+  guarded_add: true
+  seed_nn: 0.4
+stop:
+  max_generations: 500
+  min_generations: 100
+  time_budget_s: null
+  stagnation_window: 50
+  stagnation_delta: 0.001
+output:
+  dir: results/electric-v2
+  top_k: auto
+  dedupe_overlap: 0.5
+  dedupe_shape: 0.3
+  labels: true
+  snapshot_every: 10
+log:
+  level: info
+  log_every: 10
+  history: true
+  channel_capacity: 1024
+eval:
+  ground_truth: null
+  average: micro
+  off_target: ignore

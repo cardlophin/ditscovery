@@ -1,0 +1,191 @@
+# version ditscover: 0.1.0
+datasets:
+- synthetic:
+    name: synth-varlen
+    split: validation
+    n_series: 30
+    n: 5000
+    lens:
+    - 40
+    - 60
+    - 80
+    occ: 6
+    stretch: 0.3
+    noise: 0.1
+    seed: 0
+- synthetic:
+    name: synth-varlen
+    split: test
+    n_series: 30
+    n: 5000
+    lens:
+    - 40
+    - 60
+    - 80
+    occ: 6
+    stretch: 0.3
+    noise: 0.1
+    seed: 0
+- tsmd:
+    name: ECG5000
+    split: validation
+    n_series: 30
+- tsmd:
+    name: ECG5000
+    split: test
+    n_series: 30
+- tsmd:
+    name: Fungi
+    split: validation
+    n_series: 30
+- tsmd:
+    name: Fungi
+    split: test
+    n_series: 30
+- tsmd:
+    name: Plane
+    split: validation
+    n_series: 30
+- tsmd:
+    name: Plane
+    split: test
+    n_series: 30
+- tsmd:
+    name: Mallat
+    split: validation
+    n_series: 30
+- tsmd:
+    name: Mallat
+    split: test
+    n_series: 30
+- tsmd:
+    name: Symbols
+    split: validation
+    n_series: 30
+- tsmd:
+    name: Symbols
+    split: test
+    n_series: 30
+methods:
+- method: ditscover
+  label: v1
+  params:
+    archive: 0
+    guarded_add: false
+    immigrants: 0
+    labels: false
+    mating_tau: null
+    min_generations: 0
+    min_std_rel: 0
+    model: v1
+    phase: 0
+    rank_by: ideal
+    refine: 0
+    rescale: 0
+    seed_nn: 0
+    split: 0
+    stagnation_delta: 0.0001
+    stagnation_window: 30
+  grid: {}
+- method: ditscover
+  label: full
+  params: {}
+  grid: {}
+- method: ditscover
+  label: full-loo
+  params:
+    loo: false
+  grid: {}
+- method: ditscover
+  label: full-margin
+  params:
+    margin: false
+  grid: {}
+- method: ditscover
+  label: full-coverage
+  params:
+    coverage: false
+  grid: {}
+- method: ditscover
+  label: full-scale
+  params:
+    scale: false
+  grid: {}
+- method: ditscover
+  label: full-refine
+  params:
+    refine: 0
+  grid: {}
+- method: ditscover
+  label: full-collective
+  params:
+    phase: 0
+    rescale: 0
+  grid: {}
+- method: ditscover
+  label: full-guarded_add
+  params:
+    guarded_add: false
+  grid: {}
+- method: ditscover
+  label: full-mating
+  params:
+    mating_tau: null
+  grid: {}
+- method: ditscover
+  label: full-split
+  params:
+    split: 0
+  grid: {}
+- method: ditscover
+  label: full-seed_nn
+  params:
+    seed_nn: 0
+  grid: {}
+- method: ditscover
+  label: full-archive
+  params:
+    archive: 0
+  grid: {}
+- method: ditscover
+  label: full-immigrants
+  params:
+    immigrants: 0
+  grid: {}
+- method: ditscover
+  label: full-quality_rank
+  params:
+    rank_by: ideal
+  grid: {}
+- method: ditscover
+  label: full-dedupe_v2
+  params:
+    dedupe_overlap: 1.0
+    dedupe_shape: 0.0
+  grid: {}
+- method: ditscover
+  label: full-min_std_rel
+  params:
+    min_std_rel: 0
+  grid: {}
+- method: ditscover
+  label: full-labelling
+  params:
+    labels: false
+  grid: {}
+seeds:
+- 0
+- 1
+- 2
+k: oracle
+timeout_s: 600.0
+threads: 2
+jobs: 5
+eval:
+  average: micro
+  off_target: ignore
+scaling: null
+tune: null
+max_runs: 20000
+stats: true
+save_sets: true
