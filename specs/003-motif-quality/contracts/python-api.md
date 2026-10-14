@@ -1,11 +1,10 @@
 # Contract: Python API changes
 
 ```python
-res = ds.discover(x, min_len=40, max_len=100, top_k="auto")      # fitness v2 by default
+res = ds.discover(x, min_len=40, max_len=100, top_k="auto")      # motifs ranked by quality
 res.labels            # np.ndarray[int] | None, one label per original index (-1 = none)
 m = res.motifs[0]
 m.extent, m.margin, m.coverage, m.quality                        # new fields
-ds.discover(x, model="v1", rank_by="ideal", ...)                 # previous behaviour (until removed)
 ds.discover(x, kind="zdtw", band=0.1, ...)                       # normalised DTW, medoid prototype
 ```
 

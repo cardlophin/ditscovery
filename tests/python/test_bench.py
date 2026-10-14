@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import sys
 import types
@@ -124,6 +125,153 @@ def test_market_data_datasets_report_cost_only(tmp_path, fake, monkeypatch):
     by = {(r["label"], r["dataset"]): r for r in b.summary["by_method_dataset"]}
     assert by["fake", "market"]["f1_mean"] is None and by["fake_det", "market"]["failures"] == 2
     assert all("market" not in ranks for ranks in b.summary["rank"].values())
+
+
+def test_choose_picks_the_best_mean_f1_first_in_grid_order():
+    from ditscover.bench import _choose
+
+    combos = [{"p": 1}, {"p": 2}, {"p": 3}]
+    scores = {0: [0.2, 0.4], 1: [0.5, 0.5], 2: [0.6, 0.4]}
+    assert _choose(combos, scores) == {"p": 2}
+    assert _choose(combos, {0: [0.1], 1: [0.0], 2: [0.1]}) == {"p": 1}
+
+
+def test_grid_is_tuned_on_validation_and_test_is_evaluated_once(tmp_path, fake):
+    grid = {"mode": ["ok"], "sleep": [0.0, 0.001]}
+    cfg = config([{"method": "fake", "grid": grid}], n_series=2, tune={"n_series": 2})
+    b = ds.bench(cfg, out=tmp_path / "b")
+    tune = [r for r in b.runs if r["split"] == "tune"]
+    test = [r for r in b.runs if r["split"] == "test"]
+    assert len(tune) == 2 * 2 and len(test) == 2
+    assert {r["series"] for r in tune}.isdisjoint({r["series"] for r in test})
+    assert b.summary["tuned"]["fake"]["syn"] == {"mode": "ok", "sleep": 0.0}
+    assert {r["split"] for r in b.summary["by_method_dataset"]} == {"test"}
+    assert fake() == 6
+    ds.bench(cfg, out=tmp_path / "b")
+    assert fake() == 6
+
+
+def test_max_runs_guard_reports_the_estimate(tmp_path, fake):
+    grid = {"sleep": [0.0, 0.001, 0.002]}
+    cfg = config([{"method": "fake", "grid": grid}], tune={"n_series": 2}, max_runs=7)
+    with pytest.raises(ValueError, match=r"8 runs.*max_runs = 7"):
+        ds.bench(cfg, out=tmp_path / "b")
+    assert fake() == 0
+
+
+def test_synthetic_validation_split_differs_from_test(tmp_path):
+    from ditscover.bench import datasets
+
+    spec = {"name": "syn", "n_series": 1, "n": 1500, "lens": [40], "occ": 4, "seed": 0}
+    test = datasets.load({"synthetic": {**spec, "split": "test"}}, tmp_path)
+    val = datasets.load({"synthetic": {**spec, "split": "validation"}}, tmp_path)
+    assert val[0]["id"] != test[0]["id"]
+    assert not np.array_equal(val[0]["x"], test[0]["x"])
+    same = datasets.load({"synthetic": {**spec, "seed": 1_000_000}}, tmp_path / "other")
+    assert np.array_equal(val[0]["x"], same[0]["x"])
+
+
+def test_one_dataset_on_two_splits_has_distinct_keys_and_stored_sets(tmp_path, fake):
+    synth = {"name": "syn", "n_series": 1, "n": 1500, "lens": [40], "occ": 4}
+    cfg = {
+        "datasets": [{"synthetic": synth}, {"synthetic": {**synth, "split": "validation"}}],
+        "methods": [{"method": "fake"}],
+        "seeds": [0],
+    }
+    b = ds.bench(cfg, out=tmp_path / "b")
+    assert {r["split"] for r in b.runs} == {"test", "validation"}
+    lines = (tmp_path / "b" / "sets.jsonl").read_text().splitlines()
+    keys = [tuple(json.loads(line)["key"]) for line in lines]
+    assert len(keys) == len(set(keys)) == 2
+    sets = b.sets(keys[0])
+    assert len(sets) == 1 and len(sets[0]) == 2
+    ds.bench(cfg, out=tmp_path / "b")
+    assert len((tmp_path / "b" / "sets.jsonl").read_text().splitlines()) == 2
+    splits = {(r["dataset"], r["split"]) for r in b.summary["by_method_dataset"]}
+    assert splits == {("syn", "test"), ("syn", "validation")}
+
+
+def test_report_gets_an_errors_tab_from_stored_sets(tmp_path, fake):
+    b = ds.bench(config([{"method": "fake"}, {"method": "fake_det"}]), out=tmp_path / "b")
+    html = b.plot()
+    assert ">Errors</button>" in html and "false alarm" in html
+    assert "tests" in b.summary and b.summary["tests"][0]["a"] == "fake"
+
+
+def test_paired_tests_average_seeds_and_apply_holm():
+    from scipy.stats import wilcoxon
+
+    from ditscover.bench import paired_tests
+
+    rng = np.random.default_rng(0)
+    runs = []
+    f1 = {"A": rng.uniform(0.5, 1.0, 8), "B": rng.uniform(0.0, 0.6, 8), "C": rng.uniform(0, 1, 8)}
+    for label, vals in f1.items():
+        for i, v in enumerate(vals):
+            for seed, eps in ((0, 0.02), (1, -0.02)):
+                runs.append(run(label, f"s{i}", seed, "ok", v + eps) | {"split": "test"})
+    tests = paired_tests(runs)
+    assert {(t["a"], t["b"]) for t in tests} == {("A", "B"), ("A", "C"), ("B", "C")}
+    ab = next(t for t in tests if (t["a"], t["b"]) == ("A", "B"))
+    want = wilcoxon(f1["A"], f1["B"], zero_method="zsplit")
+    assert ab["n"] == 8 and ab["dataset"] == "d" and ab["split"] == "test"
+    assert ab["p"] == pytest.approx(want.pvalue)
+    ps = sorted(t["p"] for t in tests)
+    holm = sorted(t["p_holm"] for t in tests)
+    assert holm[0] == pytest.approx(min(1.0, 3 * ps[0]))
+    assert all(h >= p for h, p in zip(holm, ps, strict=True))
+    same = [run("A", "s0", 0, "ok", 0.5), run("B", "s0", 0, "ok", 0.5)]
+    assert paired_tests([r | {"split": "test"} for r in same])[0]["p"] == 1.0
+
+
+def _ablation_runs(test_flip=False):
+    rng = np.random.default_rng(3)
+    base = rng.uniform(0.4, 0.8, 10)
+    effect = {"full": 0.0, "full-a": -0.2, "full-b": 0.0, "full-labelling": 0.0, "v1": -0.3}
+    runs = []
+    for split in ("validation", "test"):
+        for label, d in effect.items():
+            if test_flip and split == "test" and label == "full-a":
+                d = +0.2
+            for i, v in enumerate(base):
+                noise = 0.0 if label == "full" else rng.normal(0, 0.001)
+                for seed in (0, 1):
+                    f1 = min(1.0, max(0.0, v + d + noise))
+                    runs.append(run(label, f"s{i}", seed, "ok", f1) | {"split": split})
+    return runs
+
+
+def test_ablation_rows_and_validation_only_decisions():
+    from ditscover.bench import ablation, decisions
+
+    rows = ablation(_ablation_runs())
+    comps = {(r["component"], r["split"]) for r in rows}
+    want = {("a", "validation"), ("b", "test"), ("labelling", "validation"), ("v1", "test")}
+    assert want <= comps
+    a = next(r for r in rows if (r["component"], r["split"]) == ("a", "validation"))
+    assert a["delta_f1"] == pytest.approx(-0.2, abs=0.01)
+    assert a["ci_low"] <= a["delta_f1"] <= a["ci_high"] < 0
+    assert a["p_holm"] < 0.05 and a["p"] <= a["p_holm"]
+    dec = {d["component"]: d for d in decisions(rows)}
+    assert dec["a"]["keep"] and not dec["b"]["keep"]
+    assert dec["labelling"]["keep"] and "output guarantee" in dec["labelling"]["reason"]
+    assert not dec["v1"]["keep"], dec["v1"]
+    flipped = {d["component"]: d["keep"] for d in decisions(ablation(_ablation_runs(True)))}
+    assert flipped == {k: d["keep"] for k, d in dec.items()}
+
+
+def test_ablation_tab_in_the_report(tmp_path):
+    from ditscover import report
+    from ditscover.bench import _write, ablation, decisions, summarize
+
+    runs = _ablation_runs()
+    rows = ablation(runs)
+    summary = summarize(runs) | {"versions": {}, "config": {}, "ablation": rows}
+    summary["decisions"] = decisions(rows)
+    (tmp_path / "summary.json").write_text(json.dumps(summary))
+    _write(tmp_path / "runs.csv", runs, "w")
+    html = report.bench_report(ds.load_bench(tmp_path))
+    assert ">Ablation</button>" in html and "output guarantee" in html
 
 
 def test_tsmd_series_are_generated_offline_and_cached(tmp_path, monkeypatch):

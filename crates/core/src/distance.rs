@@ -3,19 +3,37 @@ pub enum Distance {
     ZEuclid,
     Euclid,
     Dtw { band: f64 },
+    ZDtw { band: f64 },
 }
 
 impl Distance {
     pub fn znorm(&self) -> bool {
-        matches!(self, Distance::ZEuclid)
+        matches!(self, Distance::ZEuclid | Distance::ZDtw { .. })
+    }
+
+    pub fn is_dtw(&self) -> bool {
+        matches!(self, Distance::Dtw { .. } | Distance::ZDtw { .. })
     }
 
     pub fn dist(&self, a: &[f64], b: &[f64], row: &mut [f64]) -> f64 {
         match *self {
             Distance::ZEuclid | Distance::Euclid => euclid(a, b),
-            Distance::Dtw { band } => dtw(a, b, (band * a.len() as f64).ceil() as usize, row),
+            Distance::Dtw { band } | Distance::ZDtw { band } => {
+                dtw(a, b, (band * a.len() as f64).ceil() as usize, row)
+            }
         }
     }
+}
+
+fn complexity(a: &[f64]) -> f64 {
+    a.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f64>().sqrt()
+}
+
+// Batista et al. (2014): >= 1, and 1 when both inputs are equally complex.
+pub fn cid_factor(a: &[f64], b: &[f64]) -> f64 {
+    let (ca, cb) = (complexity(a), complexity(b));
+    let lo = ca.min(cb);
+    if lo < 1e-12 { if ca.max(cb) < 1e-12 { 1.0 } else { f64::INFINITY } } else { ca.max(cb) / lo }
 }
 
 pub fn resample(src: &[f64], dst: &mut [f64]) {
@@ -110,6 +128,27 @@ mod tests {
         let d = dtw(&a, &b, 2, &mut row);
         assert!(d <= e && d < e * 0.5);
         assert_eq!(dtw(&a, &a, 2, &mut row), 0.0);
+    }
+
+    #[test]
+    fn cid_factor_is_at_least_one() {
+        let a = [0.0, 1.0, 0.0, 1.0, 0.0];
+        let b = [0.0, 2.0, 0.0, 2.0, 0.0];
+        assert_eq!(cid_factor(&a, &a), 1.0);
+        assert_eq!(cid_factor(&a, &[1.0, 0.0, 1.0, 0.0, 1.0]), 1.0);
+        assert!((cid_factor(&a, &b) - 2.0).abs() < 1e-12);
+        assert_eq!(cid_factor(&b, &a), cid_factor(&a, &b));
+        assert_eq!(cid_factor(&[1.0; 4], &[2.0; 4]), 1.0);
+    }
+
+    #[test]
+    fn zdtw_normalises_and_bands_like_dtw() {
+        let d = Distance::ZDtw { band: 0.2 };
+        assert!(d.znorm() && d.is_dtw() && !Distance::ZEuclid.is_dtw());
+        let mut row = vec![0.0; 9];
+        let (a, b) =
+            ([0.0, 1.0, 2.0, 1.0, 0.0, -1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 2.0, 1.0, 0.0, -1.0, 0.0]);
+        assert_eq!(d.dist(&a, &b, &mut row), Distance::Dtw { band: 0.2 }.dist(&a, &b, &mut row));
     }
 
     #[test]

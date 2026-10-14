@@ -19,15 +19,16 @@ recorded in research.md.
 ## 2. Fitness v2 unit behaviour (US2)
 
 ```bash
-cargo test -p ditscover-core fitness index
+cargo test -p ditscover-core --test fitness --test index
 ```
 
-Hand-built series: true set ≻ set + junk, true set ≻ set − one, true set ≻ tiling; k = 2 not halved.
+Hand-built series: true set outranks set + junk (quality), set − one has a lower margin, a tiling has
+no quality; k = 2 not halved.
 
 ## 3. Search (US3)
 
 ```bash
-cargo test -p ditscover-core refine ops archive
+cargo test -p ditscover-core --test refine --test ops
 ```
 
 Shifted / resized occurrences (≤ 15 %) recover planted boundaries ± 2 points on noise-free data.
@@ -50,9 +51,10 @@ Expected: no overlapping occurrences across motifs; top motifs with different sh
 ditscover bench specs/003-motif-quality/contracts/ablation.example.yaml --out results/ablation-003 --plot
 ```
 
-Expected (~10 h sequential, overnight): Ablation tab with ΔF1 per component × dataset × split;
-`summary.json` `decisions` lists keep / delete per component (validation only, Holm within each
-dataset) and the `v1` decision; decisions copied to research.md (R8), losing components deleted.
+Expected: Ablation tab with ΔF1 per component × dataset × split; `summary.json` `decisions` lists
+keep / delete per component (validation only, Holm within each dataset). The full 18-variant study
+(19 440 runs, ~7.5 h with 5 jobs) is in `results/ablation-003` and research.md (R8); the contract now
+holds only the surviving components (7 560 runs).
 
 ```bash
 ditscover bench specs/003-motif-quality/contracts/final.example.yaml --out results/bench-003 --plot

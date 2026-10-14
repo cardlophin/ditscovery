@@ -21,6 +21,12 @@ motif:
 distance:
   kind: dtw
 
+fitness:
+  extent_q: 0.9
+  null_pairs: 256
+  cid: false
+  loo: true
+
 ga:
   population: 200
   crossover: 0.9
@@ -33,17 +39,24 @@ ga:
   scan_step: 0.125
   init_greedy: 0.5
   niche_jaccard: 0.5
+  refine: 0.3
+  refine_radius: 0.1
+  guarded_add: true
+  seed_nn: 0.4
 
 stop:
   max_generations: 3000
+  min_generations: 100
   time_budget_s: 60.0
-  stagnation_window: 40
+  stagnation_window: 50
   stagnation_delta: 0.001
 
 output:
   dir: results/adm-daily-long-zeuclid
   top_k: 5
-  dedupe_jaccard: 0.3
+  dedupe_overlap: 0.5
+  dedupe_shape: 0.3
+  labels: true
   snapshot_every: 10
 
 log:

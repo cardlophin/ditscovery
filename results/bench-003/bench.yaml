@@ -1,0 +1,80 @@
+# version stomp: 1.14.1
+# version locomotif: 0.2.0
+# version ditscover: 0.1.0
+datasets:
+- synthetic:
+    name: synth-varlen
+    split: test
+    n_series: 20
+    n: 5000
+    lens:
+    - 40
+    - 60
+    - 80
+    occ: 6
+    stretch: 0.3
+    noise: 0.1
+    seed: 0
+- tsmd:
+    name: ECG5000
+    split: test
+    n_series: 20
+- tsmd:
+    name: Fungi
+    split: test
+    n_series: 20
+- tsmd:
+    name: Plane
+    split: test
+    n_series: 20
+- tsmd:
+    name: Mallat
+    split: test
+    n_series: 20
+- tsmd:
+    name: Symbols
+    split: test
+    n_series: 20
+methods:
+- method: stomp
+  label: stomp
+  params: {}
+  grid:
+    max_matches:
+    - 5
+    - 10
+    - 20
+- method: locomotif
+  label: locomotif
+  params: {}
+  grid:
+    highpass:
+    - false
+    - true
+    rho:
+    - 0.5
+    - 0.6
+    - 0.7
+    - 0.8
+- method: ditscover
+  label: ditscover
+  params: {}
+  grid: {}
+seeds:
+- 0
+- 1
+- 2
+k: oracle
+timeout_s: 600.0
+threads: null
+jobs: 1
+eval:
+  average: micro
+  off_target: ignore
+scaling: null
+tune:
+  n_series: 10
+  metric: f1
+max_runs: 20000
+stats: true
+save_sets: true

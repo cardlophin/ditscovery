@@ -38,7 +38,21 @@ def motifs(res):
         fig.add_scatter(
             x=xs, y=ys, text=text, mode="lines", name=f"motif {i + 1}", line=dict(color=color(i))
         )
+    if res.labels is not None:
+        _labels_band(fig, res)
     return _dates(fig.update_layout(title="Series and motif occurrences"), res)
+
+
+# One marker per labelled point, coloured by motif, in a band under the series (grey = none).
+def _labels_band(fig, res):
+    y = np.asarray(res.series, dtype=float)
+    lo, span = np.nanmin(y), (np.nanmax(y) - np.nanmin(y)) or 1.0
+    idx = np.arange(len(res.labels))
+    colors = ["#d0d7de" if lab < 0 else color(lab) for lab in res.labels]
+    fig.add_scatter(
+        x=idx, y=np.full(len(idx), lo - 0.08 * span), mode="markers", name="labels",
+        marker=dict(color=colors, symbol="square", size=6), hoverinfo="skip",
+    )  # fmt: skip
 
 
 def overlay(res):
@@ -133,11 +147,16 @@ def method_colors(summary):
     return {label: color(i) for i, label in enumerate(labels)}
 
 
+def where(r):
+    split = r.get("split") or "test"
+    return r["dataset"] if split == "test" else f"{r['dataset']} ({split})"
+
+
 def _bars(fig, rows, key, colors, row, legend):
     for label, c in colors.items():
         rs = [r for r in rows if r["label"] == label]
         fig.add_bar(
-            x=[r["dataset"] for r in rs],
+            x=[where(r) for r in rs],
             y=[r[f"{key}_mean"] for r in rs],
             error_y=dict(array=[r[f"{key}_std"] for r in rs]),
             name=label,
@@ -172,6 +191,113 @@ def cost(summary):
     return fig.update_layout(
         title="Cost per dataset (successful runs)", barmode="group", height=700
     )
+
+
+def _iou(a, b):
+    inter = max(0, min(a[0] + a[1], b[0] + b[1]) - max(a[0], b[0]))
+    return inter / (a[1] + b[1] - inter)
+
+
+# (segment, GT set, status, IoU) for every found occurrence and every missed GT occurrence under
+# the PROM set assignment: a found occurrence is a hit when it overlaps an unmatched GT occurrence
+# of its assigned set with IoU > 0.5; an unassigned found set has GT set None.
+def assign(found, gt):
+    from . import prom
+
+    found = [[tuple(o) for o in occ] for occ in found]
+    gt = [[tuple(o) for o in occ] for occ in gt]
+    pairs = {}
+    if found:
+        pairs = {s["found"]: s["gt"] for s in prom(found, gt)["sets"] if s["found"] is not None}
+    out, matched = [], set()
+    for j, occ in enumerate(found):
+        c = pairs.get(j)
+        for o in occ:
+            free = [t for t in ([] if c is None else gt[c]) if t not in matched]
+            best = max(free, key=lambda t: _iou(o, t), default=None)
+            iou = 0.0 if best is None else _iou(o, best)
+            if iou > 0.5:
+                matched.add(best)
+            out.append((o, c, "hit" if iou > 0.5 else "false alarm", iou))
+    out += [(o, c, "miss", 0.0) for c, occ in enumerate(gt) for o in occ if o not in matched]
+    return out
+
+
+STATUS_DASH = {"truth": "solid", "hit": "solid", "false alarm": "dash", "miss": "dot"}
+UNASSIGNED = "#8c959f"
+
+
+def _lane(fig, entries, y, method, row, shown):
+    groups = {}
+    for seg, c, status, iou in entries:
+        groups.setdefault((c, status), []).append((seg, iou))
+    for (c, status), segs in groups.items():
+        name = "unassigned" if c is None else f"class {c + 1}"
+        line = dict(color=UNASSIGNED if c is None else color(c), width=7, dash=STATUS_DASH[status])
+        xs, ys, text = [], [], []
+        for (s, n), iou in segs:
+            tip = f"{method or 'ground truth'}: {name}"
+            tip += f", {status}, IoU {iou:.2f}" if status in ("hit", "false alarm") else ""
+            tip += f", {status}" if status == "miss" else ""
+            tip += f"<br>[{s}, {s + n})"
+            xs, ys, text = xs + [s, s + n, None], ys + [y, y, None], text + [tip, tip, None]
+        fig.add_scatter(
+            x=xs, y=ys, text=text, mode="lines", name=name, legendgroup=name,
+            showlegend=name not in shown, opacity=0.5 if status == "miss" else 1.0,
+            line=line, customdata=None if method is None else [method] * len(xs),
+            hovertemplate="%{text}<extra></extra>", row=row, col=1,
+        )  # fmt: skip
+        shown.add(name)
+
+
+def _status_legend(fig):
+    for status in ("hit", "false alarm", "miss"):
+        fig.add_scatter(
+            x=[None], y=[None], mode="lines", name=status, legendgroup=status,
+            line=dict(color="#57606a", width=4, dash=STATUS_DASH[status]),
+        )  # fmt: skip
+
+
+# items: [(series id, x, gt sets, {label: found sets})]; one lane per method under the series,
+# each window coloured by the GT class its set was assigned to.
+def errors(items, title="Errors per series"):
+    fig = make_subplots(rows=len(items), cols=1, subplot_titles=[i[0] for i in items])
+    shown = set()
+    for row, (_, x, gt, found) in enumerate(items, 1):
+        x = np.asarray(x, dtype=float)
+        lo, gap = np.nanmin(x), 0.25 * (np.nanmax(x) - np.nanmin(x) or 1.0)
+        fig.add_scatter(y=x, mode="lines", line_color="#b0b0b0", showlegend=False, row=row, col=1)
+        truth = [(tuple(o), c, "truth", 1.0) for c, occ in enumerate(gt) for o in occ]
+        _lane(fig, truth, lo - gap, None, row, shown)
+        for lane, (label, sets) in enumerate(found.items(), 2):
+            _lane(fig, assign(sets, gt), lo - lane * gap, label, row, shown)
+        labels = ["GT", *found]
+        ticks = [lo - (i + 1) * gap for i in range(len(labels))]
+        fig.update_yaxes(tickvals=ticks, ticktext=labels, row=row, col=1)
+    _status_legend(fig)
+    return fig.update_layout(title=title, height=max(300, 260 * len(items)))
+
+
+# ΔF1 per removed component (bars) with its bootstrap CI, one subplot per split.
+def ablation(rows):
+    splits = list(dict.fromkeys(r["split"] for r in rows))
+    fig = make_subplots(rows=len(splits), cols=1, subplot_titles=splits, shared_xaxes=True)
+    datasets = list(dict.fromkeys(r["dataset"] for r in rows))
+    for row, split in enumerate(splits, 1):
+        for i, d in enumerate(datasets):
+            rs = [r for r in rows if r["split"] == split and r["dataset"] == d]
+            fig.add_bar(
+                x=[r["component"] for r in rs], y=[r["delta_f1"] for r in rs], name=d,
+                marker_color=color(i), legendgroup=d, showlegend=row == 1,
+                error_y=dict(
+                    type="data", symmetric=False,
+                    array=[r["ci_high"] - r["delta_f1"] for r in rs],
+                    arrayminus=[r["delta_f1"] - r["ci_low"] for r in rs],
+                ),
+                row=row, col=1,
+            )  # fmt: skip
+    title = "F1 change when each component is removed (negative = the component helps)"
+    return fig.update_layout(title=title, barmode="group", height=350 * len(splits))
 
 
 def scaling(summary):

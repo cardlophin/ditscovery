@@ -163,7 +163,7 @@ def test_ticker_shortcuts(tmp_path):
             "--out", out, env=env)  # fmt: skip
     assert r.returncode == 0, r.stderr
     assert "ticker: AAPL" in (out / "config.yaml").read_text()
-    assert (out / "series.csv").read_text().startswith("timestamp,value\n2024-01-01,")
+    assert (out / "series.csv").read_text().startswith("timestamp,value,label\n2024-01-01,")
     r = cli("run", "--data", "x.csv", "--ticker", "AAPL", *args, env=env)
     assert r.returncode == 2
 

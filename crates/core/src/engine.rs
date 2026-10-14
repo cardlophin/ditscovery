@@ -1,6 +1,7 @@
 use crate::config::{Config, Error};
 use crate::events::{Emitter, Event, GenerationRecord};
-use crate::motif::{Ctx, Individual, Scratch, Segment, evaluate, objectives};
+use crate::fitness::objectives;
+use crate::motif::{Ctx, Individual, Scratch, Segment, evaluate};
 use crate::nsga::{hv3d, survive, tournament};
 use crate::ops;
 use crate::result::StopReason;
@@ -36,18 +37,29 @@ fn rng(seed: u64, generation: u32, idx: usize, stream: u64) -> ChaCha8Rng {
     ChaCha8Rng::seed_from_u64(splitmix64(mix))
 }
 
-fn initial(ctx: &Ctx, cfg: &Config) -> Result<Vec<Individual>, Error> {
+fn evaluated(segs: Vec<Segment>, ctx: &Ctx, s: &mut Scratch) -> Individual {
+    let raw = evaluate(&segs, ctx, s);
+    Individual { raw, ..Individual::new(segs) }
+}
+
+// The first `seed_nn` share grows nearest-neighbour seeds; the rest keeps the greedy/random mix.
+fn initial(ctx: &Ctx, cfg: &Config, seeds: &[Segment]) -> Result<Vec<Individual>, Error> {
     let n = cfg.ga.population as usize;
-    let greedy = (cfg.ga.init_greedy * n as f64).round() as usize;
+    let n_seed = if seeds.is_empty() { 0 } else { (cfg.ga.seed_nn * n as f64).round() as usize };
+    let greedy = (cfg.ga.init_greedy * (n - n_seed) as f64).round() as usize;
     let max_len = cfg.motif.max_len as usize;
     let pop: Option<Vec<Individual>> = (0..n)
         .into_par_iter()
         .map_init(
             || Scratch::new(max_len),
             |s, i| {
-                let segs = ops::init(i < greedy, ctx, s, &mut rng(cfg.seed, 0, i, INIT))?;
-                let raw = evaluate(&segs, ctx, s);
-                Some(Individual { raw, ..Individual::new(segs) })
+                let r = &mut rng(cfg.seed, 0, i, INIT);
+                let segs = match i < n_seed {
+                    true => ops::grow(seeds[i % seeds.len()], ctx, s, r)
+                        .or_else(|| ops::init(true, ctx, s, r)),
+                    false => ops::init(i - n_seed < greedy, ctx, s, r),
+                }?;
+                Some(evaluated(segs, ctx, s))
             },
         )
         .collect();
@@ -60,24 +72,31 @@ fn initial(ctx: &Ctx, cfg: &Config) -> Result<Vec<Individual>, Error> {
     })
 }
 
-fn offspring(pop: &[Individual], ctx: &Ctx, cfg: &Config, generation: u32) -> Vec<Individual> {
-    let max_len = cfg.motif.max_len as usize;
-    let pairs: Vec<[Individual; 2]> = (0..pop.len() / 2)
+// Pairs not started once `cancel` is raised or the deadline passed are skipped, so either stop
+// lands within one evaluation.
+fn offspring(
+    pop: &[Individual],
+    ctx: &Ctx,
+    generation: u32,
+    halt: &(dyn Fn() -> bool + Sync),
+) -> Vec<Individual> {
+    let cfg = ctx.cfg;
+    let pairs: Vec<Option<[Individual; 2]>> = (0..pop.len() / 2)
         .into_par_iter()
         .map_init(
-            || Scratch::new(max_len),
+            || Scratch::new(cfg.motif.max_len as usize),
             |s, p| {
+                if halt() {
+                    return None;
+                }
                 let r = &mut rng(cfg.seed, generation, p, VARY);
                 let (i, j) = (tournament(pop, r), tournament(pop, r));
                 let (a, b) = ops::vary(&pop[i].segs, &pop[j].segs, &cfg.ga, ctx, s, r);
-                [a, b].map(|segs: Vec<Segment>| {
-                    let raw = evaluate(&segs, ctx, s);
-                    Individual { raw, ..Individual::new(segs) }
-                })
+                Some([a, b].map(|segs| evaluated(segs, ctx, s)))
             },
         )
         .collect();
-    pairs.into_iter().flatten().collect()
+    pairs.into_iter().flatten().flatten().collect()
 }
 
 fn record(
@@ -127,6 +146,9 @@ fn should_stop(
     if s.time_budget_s.is_some_and(|t| elapsed >= t) {
         return Some(StopReason::TimeBudget);
     }
+    if generation < s.min_generations {
+        return None;
+    }
     let w = s.stagnation_window? as usize;
     let g = hvs.len() - 1;
     (g >= w && hvs[g] - hvs[g - w] < s.stagnation_delta).then_some(StopReason::Stagnation)
@@ -135,38 +157,42 @@ fn should_stop(
 pub fn run(ctx: &Ctx, cfg: &Config, cancel: &AtomicBool, em: &Emitter) -> Result<Outcome, Error> {
     let t0 = Instant::now();
     let (n, niche) = (cfg.ga.population as usize, cfg.ga.niche_jaccard);
-    let mut pop = initial(ctx, cfg)?;
+    let seeds = if cfg.ga.seed_nn > 0.0 { ops::nn_seeds(ctx, 4 * n) } else { Vec::new() };
+    let mut pop = initial(ctx, cfg, &seeds)?;
     let c_ref = pop.iter().map(|i| i.raw.cohesion).fold(0.0, f64::max);
     let c_ref = if c_ref > 0.0 { c_ref } else { 1.0 };
-    let score = |pop: &mut Vec<Individual>| {
-        pop.iter_mut().for_each(|i| i.obj = objectives(&i.raw, &cfg.motif, c_ref))
+    let score = |pop: &mut [Individual]| {
+        pop.iter_mut().for_each(|i| i.obj = objectives(&i.raw, ctx, c_ref));
     };
     score(&mut pop);
     pop = survive(pop, n, niche);
     if cancel.load(Ordering::Relaxed) {
         pop.clear();
-        return Ok(Outcome { pop, stop: StopReason::Cancelled, generations: 0, elapsed_s: 0.0 });
+        let stop = StopReason::Cancelled;
+        return Ok(Outcome { pop, stop, generations: 0, elapsed_s: 0.0 });
     }
+    let deadline = cfg.stop.time_budget_s.map(|b| t0 + std::time::Duration::from_secs_f64(b));
+    let halt = || cancel.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d);
     let mut evals = n as u64;
-    let first = record(&pop, 0, t0.elapsed().as_secs_f64(), evals, cfg);
-    let mut hvs = vec![first.hv];
-    em.send(Event::Generation(first));
+    let mut hvs = Vec::new();
     let mut generation = 0;
     let stop = loop {
-        if let Some(reason) = should_stop(cfg, generation, t0.elapsed().as_secs_f64(), &hvs, cancel)
-        {
+        if generation > 0 {
+            let mut children = offspring(&pop, ctx, generation, &halt);
+            score(&mut children);
+            evals += children.len() as u64;
+            pop.extend(children);
+            pop = survive(pop, n, niche);
+        }
+        let rec = record(&pop, generation, t0.elapsed().as_secs_f64(), evals, cfg);
+        // Clearing can drop front members, so stagnation tracks the best HV seen so far.
+        hvs.push(hvs.last().map_or(rec.hv, |&b: &f64| rec.hv.max(b)));
+        em.send(Event::Generation(rec));
+        let elapsed = t0.elapsed().as_secs_f64();
+        if let Some(reason) = should_stop(cfg, generation, elapsed, &hvs, cancel) {
             break reason;
         }
         generation += 1;
-        let mut children = offspring(&pop, ctx, cfg, generation);
-        score(&mut children);
-        evals += children.len() as u64;
-        pop.extend(children);
-        pop = survive(pop, n, niche);
-        let rec = record(&pop, generation, t0.elapsed().as_secs_f64(), evals, cfg);
-        // Clearing can drop front members, so stagnation tracks the best HV seen so far.
-        hvs.push(rec.hv.max(hvs[hvs.len() - 1]));
-        em.send(Event::Generation(rec));
     };
     Ok(Outcome { pop, stop, generations: generation, elapsed_s: t0.elapsed().as_secs_f64() })
 }

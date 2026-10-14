@@ -30,6 +30,10 @@ class Motif:
     mean_len: float
     stretch: float
     objectives: tuple[float, float, float]
+    extent: float = 0.0
+    margin: float = 0.0
+    coverage: float = 0.0
+    quality: float = 0.0
 
     @classmethod
     def _from(cls, d):
@@ -43,6 +47,7 @@ class Motif:
             d["mean_len"],
             d["stretch"],
             tuple(d["objectives"]),
+            *(d.get(k, 0.0) for k in ("extent", "margin", "coverage", "quality")),
         )
 
 
@@ -61,6 +66,8 @@ class Result:
         self.series = np.asarray(raw["series"], dtype=float)
         self.metrics = raw.get("metrics")
         self.timestamps = raw.get("timestamps")
+        labels = raw.get("labels")
+        self.labels = None if labels is None else np.asarray(labels, dtype=int)
 
     def __repr__(self):
         return (

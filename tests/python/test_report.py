@@ -50,6 +50,19 @@ def test_motif_table_is_sortable(runs):
     assert values and all(float(v) == float(v) for v in values)
 
 
+def test_labels_band_and_quality_columns(runs):
+    res = runs[0]
+    fig = plot.motifs(res)
+    assert any(t.name == "labels" for t in fig.data)
+    html = report.run_report(res)
+    for col in ("margin", "extent", "coverage", "quality"):
+        assert f'<th data-sort="num">{col}</th>' in html
+    body = html.split("<tbody>")[1].split("</tbody>")[0]
+    rows = re.findall(r"<tr>(.*?)</tr>", body)
+    quality = [float(re.findall(r'data-v="([^"]+)"', r)[-2]) for r in rows]
+    assert quality == sorted(quality, reverse=True)
+
+
 def test_tabs_and_resize(runs):
     html = report.run_report(runs[0])
     tabs = re.findall(r'<button class="tab[^"]*" data-tab="([^"]+)">([^<]+)</button>', html)
@@ -139,6 +152,33 @@ def test_bench_figures_use_one_colour_per_method(bench):
     memory = [t for t in figs[1].data if t.yaxis == "y2"]
     assert [list(t.y) for t in memory] == [[3.0, 3.0], [3.0, 3.0]]
     assert {tuple(t.x) for t in figs[2].data} == {(1000, 2000)}
+
+
+def test_errors_assign_status_class_and_iou():
+    gt = [[(0, 10), (50, 10), (100, 10)], [(300, 20), (400, 20)]]
+    found = [[(1, 10), (52, 10), (200, 10)], [(600, 5), (700, 5)]]
+    by = {}
+    for seg, cls, status, iou in plot.assign(found, gt):
+        by.setdefault(status, {})[seg] = (cls, round(iou, 3))
+    assert by["hit"] == {(1, 10): (0, 0.818), (52, 10): (0, 0.667)}
+    assert set(by["false alarm"]) == {(200, 10), (600, 5), (700, 5)}
+    assert by["false alarm"][(200, 10)][0] == 0
+    assert by["miss"] == {(100, 10): (0, 0.0), (300, 20): (1, 0.0), (400, 20): (1, 0.0)}
+    assert all(s == "miss" for _, _, s, _ in plot.assign([], gt))
+
+
+def test_errors_figure_colours_windows_by_class_with_one_lane_per_method():
+    x = np.sin(np.arange(500) / 5)
+    gt = [[(0, 10), (50, 10), (100, 10)], [(200, 10), (250, 10)]]
+    found = {"A": [[(1, 10), (52, 10)]], "B": [[(300, 10), (400, 10)]]}
+    fig = plot.errors([("s#0", x, gt, found)])
+    names = {t.name for t in fig.data}
+    assert {"hit", "false alarm", "miss", "class 1", "class 2"} <= names
+    lanes = {t.customdata[0] for t in fig.data if t.customdata is not None}
+    assert lanes == {"A", "B"}
+    hits = [t for t in fig.data if t.customdata is not None and t.line.dash == "solid"]
+    assert {t.line.color for t in hits} == {plot.color(0)}
+    assert any("IoU 0.82" in (s or "") for t in hits for s in t.text)
 
 
 def test_cli_plot_detects_a_benchmark_folder(bench):

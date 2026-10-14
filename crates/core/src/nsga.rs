@@ -92,7 +92,7 @@ pub fn hv3d(points: &[[f64; 3]], r: f64) -> f64 {
     vol
 }
 
-fn better(a: &Individual, b: &Individual) -> Ordering {
+pub fn better(a: &Individual, b: &Individual) -> Ordering {
     a.rank.cmp(&b.rank).then(b.crowd.total_cmp(&a.crowd))
 }
 

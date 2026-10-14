@@ -12,6 +12,8 @@ from .. import read_truth, synthetic_suite
 URL = "https://www.timeseriesclassification.com/aeon-toolkit/{}.zip"
 SPLITS = {"validation": 50, "test": 200}
 BAND = 0.2
+STRETCH_MARGIN = 1.1
+VALIDATION_SEED = 1_000_000
 
 
 def cache_dir() -> Path:
@@ -76,26 +78,55 @@ def tsmd(name, split, n_series) -> list[Path]:
 
 # min_len / max_len of a labelled dataset: its GT occurrence lengths widened by BAND, so that
 # fixed-length classes (TSMD-Bench) still leave the methods room (LoCoMotif finds nothing at
-# l_min == l_max).
-def _series(name, files):
+# l_min == l_max). max_stretch covers the most stretched GT set (applied to ditscover).
+def _series(name, files, split="test"):
     data = [read_truth(f) for f in files]
     lens = [n for _, sets in data for occ in sets for _, n in occ]
     lo, hi = math.floor(min(lens) * (1 - BAND)), math.ceil(max(lens) * (1 + BAND))
+    ratio = max(max(n for _, n in occ) / min(n for _, n in occ) for _, s in data for occ in s)
+    prefix = name if split == "test" else f"{name}@{split}"
     return [
-        dict(id=f"{name}#{i}", x=x, sets=sets, min_len=lo, max_len=hi)
+        dict(
+            id=f"{prefix}#{i}",
+            x=x,
+            sets=sets,
+            min_len=lo,
+            max_len=hi,
+            max_stretch=ratio * STRETCH_MARGIN,
+        )  # fmt: skip
         for i, (x, sets) in enumerate(data)
     ]
+
+
+def _synthetic(d, out, split, n_series=None):
+    d = {k: v for k, v in d.items() if k != "split"}
+    if split != "test":
+        d["seed"] = d.get("seed", 0) + VALIDATION_SEED
+    if n_series is not None:
+        d["n_series"] = n_series
+    folder = d["name"] if split == "test" else f"{d['name']}@{split}"
+    return _series(d["name"], synthetic_suite(Path(out) / "datasets" / folder, **d), split)
 
 
 def load(spec, out):
     kind, d = next(iter(spec.items()))
     if kind == "synthetic":
-        return _series(d["name"], synthetic_suite(Path(out) / "datasets" / d["name"], **d))
+        return _synthetic(d, out, d.get("split", "test"))
     if kind == "tsmd":
-        return _series(d["name"], tsmd(d["name"], d["split"], d["n_series"]))
+        return _series(d["name"], tsmd(d["name"], d["split"], d["n_series"]), d["split"])
     if kind == "files":
         return _series(d["name"], [Path(p) for p in d["paths"]])
     return [_market(d, t) for t in d["tickers"]]
+
+
+# Series the grid is tuned on; None when the dataset has no validation split.
+def validation(spec, n_series, out):
+    kind, d = next(iter(spec.items()))
+    if kind == "synthetic":
+        return _synthetic(d, out, "tune", n_series)
+    if kind == "tsmd":
+        return _series(d["name"], tsmd(d["name"], "validation", n_series), "tune")
+    return None
 
 
 # Unlabelled (cost only); gaps are interpolated linearly because the baselines reject NaN.

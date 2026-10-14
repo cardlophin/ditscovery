@@ -26,7 +26,7 @@ def res():
 
 def test_motifs_view(res):
     fig = plot.motifs(res)
-    assert len(fig.data) == 1 + len(res.motifs)
+    assert len(fig.data) == 1 + len(res.motifs) + (res.labels is not None)
     colors = [t.line.color for t in fig.data[1:]]
     assert len(set(colors)) == len(colors)
 

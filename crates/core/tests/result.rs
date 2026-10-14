@@ -1,7 +1,7 @@
 use ditscover_core::config::Config;
 use ditscover_core::metrics::GroundTruth;
 use ditscover_core::motif::{Ctx, Individual, Segment};
-use ditscover_core::result::{RunResult, to_motif, top_k};
+use ditscover_core::result::{RunResult, rank, shape_distance, to_motif};
 use ditscover_core::series::Series;
 use ditscover_core::{discover, discover_dated, synth};
 use serde_json::{Value, json};
@@ -55,10 +55,86 @@ fn save_and_load_round_trip() {
     assert!(json.get("history").is_none() && json.get("series").is_none());
     assert!(json["motifs"][0]["aligned"].is_array() && json["front"][0]["aligned"].is_null());
     let csv = std::fs::read_to_string(dir.join("series.csv")).unwrap();
-    assert!(csv.starts_with("value\n") && csv.contains("NaN"));
+    assert!(csv.starts_with("value,label\n") && csv.contains("NaN"));
     let loaded = RunResult::load(&dir).unwrap();
     assert!(loaded.series[7].is_nan());
     same(&res, &loaded);
+    assert_eq!(loaded.labels, res.labels);
+    let labels = res.labels.as_ref().expect("labels on by default");
+    assert_eq!(labels.len(), res.series.len());
+    for (m, motif) in res.motifs.iter().enumerate() {
+        for &(s, n) in &motif.occurrences {
+            assert!(labels[s as usize..(s + n) as usize].iter().all(|&l| l == m as i32));
+        }
+    }
+}
+
+#[test]
+fn reported_occurrences_never_overlap() {
+    let res = small_run(None);
+    let mut occ: Vec<(u32, u32)> = res.motifs.iter().flat_map(|m| m.occurrences.clone()).collect();
+    occ.sort();
+    assert!(occ.windows(2).all(|w| w[0].0 + w[0].1 <= w[1].0), "{occ:?}");
+}
+
+fn graded(start: u32, margin: f64, coverage: f64) -> Individual {
+    let segs = vec![Segment { start, len: 40 }, Segment { start: start + 500, len: 40 }];
+    let mut i = Individual::new(segs);
+    (i.raw.margin, i.raw.coverage) = (margin, coverage);
+    i.raw.quality = coverage * margin.max(0.0);
+    i
+}
+
+#[test]
+fn quality_ranking_puts_closed_sets_first_and_auto_keeps_only_them() {
+    let x: Vec<f64> =
+        (0..3000).map(|i| ((i as f64) * 0.37).sin() + ((i as f64) * 0.05).cos()).collect();
+    let o = [("min_len", json!(30)), ("max_len", json!(50)), ("dedupe_shape", json!(0.0))];
+    let cfg = Config::build(None, None, &o.map(|(k, v)| (k.to_string(), v))).unwrap();
+    let ctx = Ctx::new(&x, &cfg);
+    let pool =
+        [graded(0, -0.2, 0.9), graded(100, 0.3, 0.1), graded(200, 0.0, 0.5), graded(300, 0.5, 0.1)];
+    assert_eq!(rank(&pool, &ctx), [3, 1, 0, 2]);
+    let auto = [
+        ("min_len", json!(30)),
+        ("max_len", json!(50)),
+        ("dedupe_shape", json!(0.0)),
+        ("top_k", json!("auto")),
+    ];
+    let cfg = Config::build(None, None, &auto.map(|(k, v)| (k.to_string(), v))).unwrap();
+    assert_eq!(rank(&pool, &Ctx::new(&x, &cfg)), [3, 1]);
+}
+
+#[test]
+fn shape_dedupe_tolerates_small_lags() {
+    let t: Vec<f64> =
+        (0..64).map(|i| (i as f64 / 64.0 * 4.0 * std::f64::consts::PI).sin()).collect();
+    let lagged: Vec<f64> =
+        (0..64).map(|i| ((i + 6) as f64 / 64.0 * 4.0 * std::f64::consts::PI).sin()).collect();
+    let other: Vec<f64> = (0..64).map(|i| 1.0 - (i as f64 / 32.0 - 1.0).abs()).collect();
+    assert!(shape_distance(&t, &lagged) < 0.15, "{}", shape_distance(&t, &lagged));
+    assert!(shape_distance(&t, &other) > 0.5, "{}", shape_distance(&t, &other));
+    assert_eq!(shape_distance(&t, &t), 0.0);
+}
+
+#[test]
+fn containment_and_shape_duplicates_are_dropped() {
+    let (x, truth) = synth::planted(6000, &[60, 61], 8, 0.0, 0.02, 3);
+    let o = [("min_len", json!(45)), ("max_len", json!(75))];
+    let cfg = Config::build(None, None, &o.map(|(k, v)| (k.to_string(), v))).unwrap();
+    let ctx = Ctx::new(&x, &cfg);
+    let set = |occ: &[(u32, u32)], shift: u32, q: f64| {
+        let mut i = Individual::new(
+            occ.iter().map(|&(s, l)| Segment { start: s + shift, len: l }).collect(),
+        );
+        (i.raw.margin, i.raw.coverage, i.raw.quality) = (0.5, q / 0.5, q);
+        i
+    };
+    let a = set(&truth[0][..4], 0, 0.9);
+    let contained = set(&truth[0][..3], 2, 0.8);
+    let same_shape = set(&truth[0][4..], 4, 0.7);
+    let other = set(&truth[1][..4], 0, 0.6);
+    assert_eq!(rank(&[a, contained, same_shape, other], &ctx), [0, 3]);
 }
 
 #[test]
@@ -126,7 +202,7 @@ fn timestamps_are_the_first_column_of_series_csv() {
     let dir = tmp("dated");
     res.save(&dir).unwrap();
     let csv = std::fs::read_to_string(dir.join("series.csv")).unwrap();
-    assert!(csv.starts_with("timestamp,value\nt0,"), "{}", &csv[..40]);
+    assert!(csv.starts_with("timestamp,value,label\nt0,"), "{}", &csv[..40]);
     let back = RunResult::load(&dir).unwrap();
     assert_eq!(back.timestamps, res.timestamps);
     assert!(back.series[7].is_nan());
@@ -148,33 +224,6 @@ fn timestamps_must_match_the_series() {
 
 fn tmp_keep(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join("ditscover-result-tests").join(name)
-}
-
-fn ind(start: u32, rank: u32, obj: [f64; 3]) -> Individual {
-    let segs = vec![Segment { start, len: 10 }, Segment { start: start + 20, len: 10 }];
-    let mut i = Individual::new(segs);
-    (i.rank, i.obj) = (rank, obj);
-    i
-}
-
-#[test]
-fn top_k_orders_by_rank_then_ideal_distance() {
-    let pop = [
-        ind(0, 1, [0.0, 0.0, 0.0]),
-        ind(100, 0, [0.5, 0.5, 0.5]),
-        ind(200, 0, [0.1, 0.1, 0.1]),
-        ind(300, 0, [0.1, 0.1, 0.1]),
-    ];
-    assert_eq!(top_k(&pop, 3, 0.3), [2, 3, 1]);
-    assert_eq!(top_k(&pop, 10, 0.3), [2, 3, 1, 0]);
-}
-
-#[test]
-fn top_k_skips_overlapping_motifs() {
-    let pop =
-        [ind(0, 0, [0.1, 0.1, 0.1]), ind(2, 0, [0.2, 0.2, 0.2]), ind(100, 0, [0.3, 0.3, 0.3])];
-    assert_eq!(top_k(&pop, 5, 0.3), [0, 2]);
-    assert_eq!(top_k(&pop, 5, 1.0), [0, 1, 2]);
 }
 
 #[test]

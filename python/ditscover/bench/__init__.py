@@ -1,6 +1,8 @@
 import csv
 import hashlib
+import itertools
 import json
+import math
 import os
 import statistics
 import subprocess
@@ -15,7 +17,7 @@ from .. import _core, prom
 from . import datasets, methods
 
 FIELDS = [
-    "method", "label", "dataset", "series", "seed", "cfg_hash", "status", "reason",
+    "method", "label", "dataset", "split", "series", "seed", "cfg_hash", "status", "reason",
     "precision", "recall", "f1", "tp", "fp", "fn", "n_sets", "time_s", "peak_mb", "delta_mb",
     "threads", "n",
 ]  # fmt: skip
@@ -37,6 +39,25 @@ class Bench:
         from .. import report
 
         return report.bench_report(self, path, cdn)
+
+    def stored_sets(self):
+        path = self.out / "sets.jsonl"
+        if not path.exists():
+            return {}
+        lines = (json.loads(line) for line in path.read_text().splitlines() if line.strip())
+        return {tuple(d["key"]): d["sets"] for d in lines}
+
+    def sets(self, key):
+        return self.stored_sets().get(tuple(key))
+
+
+def split_of(r):
+    return r.get("split") or "test"
+
+
+# Summary key of a dataset on a split (the test split keeps the plain name).
+def ds_key(dataset, split):
+    return dataset if split in (None, "", "test") else f"{dataset}@{split}"
 
 
 def _parse(row):
@@ -65,7 +86,7 @@ def _write(path, rows, mode):
 
 
 def _key(r):
-    return (r["label"], r["dataset"], r["series"], r["seed"], r["cfg_hash"])
+    return (r["label"], r["dataset"], split_of(r), r["series"], r["seed"], r["cfg_hash"])
 
 
 def _hash(*parts):
@@ -78,18 +99,85 @@ def _k(cfg, s):
     return cfg["k"] if isinstance(cfg["k"], int) else len(s["sets"])
 
 
-def _jobs(cfg, data):
+def _spec(spec):
+    d = next(iter(spec.values()))
+    return d["name"], d.get("split", "test")
+
+
+def _seeds(cfg, m, deterministic):
+    return [None] if m["method"] in deterministic else cfg["seeds"]
+
+
+def _jobs(cfg, data, tuned):
     _, deterministic = methods.registry()
     threads = cfg["threads"] or os.cpu_count()
     for spec, series in zip(cfg["datasets"], data, strict=True):
-        name = next(iter(spec.values()))["name"]
+        name, split = _spec(spec)
         for s in series:
             k = _k(cfg, s)
             for m in cfg["methods"]:
-                seeds = [None] if m["method"] in deterministic else cfg["seeds"]
-                h = _hash(spec, m, k, cfg["threads"])
-                for seed in seeds:
-                    yield dict(m, dataset=name, s=s, k=k, seed=seed, cfg_hash=h, threads=threads)
+                combo = tuned.get(m["label"], {}).get(name)
+                h = _hash(spec, m, k, cfg["threads"], *([] if combo is None else [combo]))
+                params = (m.get("params") or {}) | (combo or {})
+                for seed in _seeds(cfg, m, deterministic):
+                    yield dict(
+                        m, params=params, dataset=name, split=split, s=s, k=k, seed=seed,
+                        cfg_hash=h, threads=threads,
+                    )  # fmt: skip
+
+
+def _tune_jobs(cfg, out):
+    grids = [m for m in cfg["methods"] if m.get("grid")]
+    if not cfg["tune"] or not grids:
+        return []
+    _, deterministic = methods.registry()
+    threads = cfg["threads"] or os.cpu_count()
+    jobs = []
+    for spec in cfg["datasets"]:
+        name, _ = _spec(spec)
+        for s in datasets.validation(spec, cfg["tune"]["n_series"], out) or []:
+            k = _k(cfg, s)
+            for m in grids:
+                for i, combo in enumerate(methods.combos(m["grid"])):
+                    h = _hash(spec, m, combo, k, cfg["threads"], "tune")
+                    params = (m.get("params") or {}) | combo
+                    jobs += [
+                        dict(
+                            m,
+                            params=params,
+                            dataset=name,
+                            split="tune",
+                            s=s,
+                            k=k,
+                            seed=seed,
+                            cfg_hash=h,
+                            threads=threads,
+                            combo=i,
+                        )  # fmt: skip
+                        for seed in _seeds(cfg, m, deterministic)
+                    ]
+    return jobs
+
+
+def _choose(combos, scores):
+    best = max(sorted(scores), key=lambda i: (statistics.fmean(scores[i]), -i))
+    return combos[best]
+
+
+def _tuned(cfg, jobs, done):
+    out = {}
+    for m in (m for m in cfg["methods"] if m.get("grid")):
+        combos = methods.combos(m["grid"])
+        out[m["label"]] = {}
+        for spec in cfg["datasets"]:
+            name, _ = _spec(spec)
+            scores = defaultdict(list)
+            for j in jobs:
+                r = done.get(_key(j))
+                if j["label"] == m["label"] and j["dataset"] == name and r is not None:
+                    scores[j["combo"]].append(_quality(r, "f1") or 0.0)
+            out[m["label"]][name] = _choose(combos, scores) if scores else combos[0]
+    return out
 
 
 def _scaling_jobs(cfg):
@@ -105,8 +193,9 @@ def _scaling_jobs(cfg):
                     seed = None if m["method"] in deterministic else cfg["seeds"][0]
                     h = _hash("scaling", n, m, cfg["threads"])
                     yield dict(
-                        m, dataset="scaling", s=s, k=1, seed=seed, cfg_hash=h, threads=threads
-                    )
+                        m, dataset="scaling", split="test", s=s, k=1, seed=seed, cfg_hash=h,
+                        threads=threads,
+                    )  # fmt: skip
 
 
 def _tail(text):
@@ -114,8 +203,15 @@ def _tail(text):
     return lines[-1] if lines else "no output"
 
 
+def _method_params(job):
+    params = dict(job.get("params") or {})
+    if job["method"] == "ditscover" and "max_stretch" in job["s"]:
+        params.setdefault("max_stretch", job["s"]["max_stretch"])
+    return params
+
+
 def _execute(job, timeout):
-    params = dict(job["params"])
+    params = _method_params(job)
     s = job["s"]
     payload = dict(method=job["method"], params=params, series=s["x"].tolist(), k=job["k"])
     payload |= dict(seed=job["seed"], threads=job["threads"])
@@ -137,8 +233,9 @@ def _execute(job, timeout):
 
 def _record(job, res, ev):
     s = job["s"]
-    row = {k: job[k] for k in ("method", "label", "dataset", "seed", "cfg_hash", "threads")}
-    row |= dict(series=s["id"], n=len(s["x"]), status=res["status"], reason=res.get("reason"))
+    row = {k: job[k] for k in ("method", "label", "dataset", "split", "seed", "cfg_hash")}
+    row |= dict(threads=job["threads"], series=s["id"], n=len(s["x"]), status=res["status"])
+    row["reason"] = res.get("reason")
     if res["status"] == "ok":
         row |= {k: res[k] for k in ("time_s", "peak_mb", "delta_mb")} | {"n_sets": len(res["sets"])}
         if s["sets"] is not None:
@@ -157,33 +254,55 @@ def _progress(i, total, row, stream):
     print(f"{head} F1={f1} {t}", file=stream, flush=True)
 
 
-def run(cfg, out, progress=None) -> Bench:
-    out = Path(out)
-    methods.check(cfg["methods"])
-    unlabelled = {next(iter(d.values()))["name"] for d in cfg["datasets"] if "yfinance" in d}
-    data = [datasets.load(d, out) for d in cfg["datasets"]]
-    jobs = list(_jobs(cfg, data))
-    if cfg["scaling"]:
-        jobs += list(_scaling_jobs(cfg))
-    versions = methods.versions(cfg["methods"])
-    header = "".join(f"# version {m}: {v}\n" for m, v in versions.items())
-    (out / "bench.yaml").write_text(header + _core.bench_yaml(cfg))
-    done = {_key(r): r for r in _read(out)}
+def _execute_all(jobs, done, cfg, out, progress):
     for job in jobs:
         job["series"] = job["s"]["id"]
     todo = [j for j in jobs if _key(j) not in done]
-    if not (out / "runs.csv").exists():
-        _write(out / "runs.csv", [], "w")
     with ThreadPoolExecutor(cfg["jobs"]) as pool:
         results = pool.map(lambda j: (j, _execute(j, cfg["timeout_s"])), todo)
         for i, (job, res) in enumerate(results, 1):
             row = _record(job, res, cfg["eval"])
             _write(out / "runs.csv", [row], "a")
+            if cfg["save_sets"] and res["status"] == "ok":
+                with open(out / "sets.jsonl", "a") as f:
+                    f.write(json.dumps({"key": list(_key(row)), "sets": res["sets"]}) + "\n")
             done[_key(row)] = row
             _progress(i, len(todo), row, progress)
-    _write(out / "runs.csv", [done[_key(j)] for j in jobs], "w")
+
+
+def run(cfg, out, progress=None) -> Bench:
+    out = Path(out)
+    methods.check(cfg["methods"])
+    unlabelled = {next(iter(d.values()))["name"] for d in cfg["datasets"] if "yfinance" in d}
+    data = [datasets.load(d, out) for d in cfg["datasets"]]
+    tune = _tune_jobs(cfg, out)
+    n_eval = sum(1 for _ in _jobs(cfg, data, {}))
+    n_eval += sum(1 for _ in _scaling_jobs(cfg)) if cfg["scaling"] else 0
+    if len(tune) + n_eval > cfg["max_runs"]:
+        raise ValueError(
+            f"the benchmark needs {len(tune) + n_eval} runs (tuning {len(tune)} + evaluation "
+            f"{n_eval}) > max_runs = {cfg['max_runs']}; shrink the grids or tune.n_series"
+        )
+    versions = methods.versions(cfg["methods"])
+    header = "".join(f"# version {m}: {v}\n" for m, v in versions.items())
+    (out / "bench.yaml").write_text(header + _core.bench_yaml(cfg))
+    done = {_key(r): r for r in _read(out)}
+    if not (out / "runs.csv").exists():
+        _write(out / "runs.csv", [], "w")
+    _execute_all(tune, done, cfg, out, progress)
+    tuned = _tuned(cfg, tune, done)
+    jobs = list(_jobs(cfg, data, tuned))
+    if cfg["scaling"]:
+        jobs += list(_scaling_jobs(cfg))
+    _execute_all(jobs, done, cfg, out, progress)
+    _write(out / "runs.csv", [done[_key(j)] for j in tune + jobs], "w")
     runs = _read(out)
-    summary = summarize(runs, unlabelled) | {"versions": versions, "config": cfg}
+    summary = summarize(runs, unlabelled) | {"versions": versions, "config": cfg, "tuned": tuned}
+    if cfg["stats"]:
+        summary["tests"] = paired_tests(runs, unlabelled)
+        if any(m["label"] == "full" for m in cfg["methods"]):
+            summary["ablation"] = ablation(runs, unlabelled)
+            summary["decisions"] = decisions(summary["ablation"])
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
     return Bench(out, runs, json.loads(json.dumps(summary)))
 
@@ -225,7 +344,9 @@ def _ranks(runs, unlabelled):
     per = defaultdict(lambda: defaultdict(list))
     for r in runs:
         if r["dataset"] not in unlabelled:
-            per[r["dataset"], r["series"]][r["label"]].append(_quality(r, "f1"))
+            per[ds_key(r["dataset"], split_of(r)), r["series"]][r["label"]].append(
+                _quality(r, "f1")
+            )
     ranks = defaultdict(lambda: defaultdict(list))
     for (dataset, _), by_label in per.items():
         means = {label: statistics.fmean(v) for label, v in by_label.items()}
@@ -241,10 +362,11 @@ def _ranks(runs, unlabelled):
 def _group(runs, unlabelled):
     groups = defaultdict(list)
     for r in runs:
-        groups[r["label"], r["dataset"]].append(r)
-    for (label, dataset), rs in groups.items():
+        groups[r["label"], r["dataset"], split_of(r)].append(r)
+    for (label, dataset, split), rs in groups.items():
         ok = [r for r in rs if r["status"] == "ok"]
-        row = dict(label=label, dataset=dataset, n_runs=len(rs), failures=len(rs) - len(ok))
+        row = dict(label=label, dataset=dataset, split=split, n_runs=len(rs))
+        row["failures"] = len(rs) - len(ok)
         for k in QUALITY:
             vals = None if dataset in unlabelled else [_quality(r, k) for r in rs]
             row[f"{k}_mean"], row[f"{k}_std"] = _stats(vals)
@@ -270,11 +392,12 @@ def _scaling(runs):
 
 
 def summarize(runs, unlabelled=frozenset()):
-    main = [r for r in runs if r["dataset"] != "scaling"]
+    main = [r for r in runs if r["dataset"] != "scaling" and split_of(r) != "tune"]
     rank = _ranks(main, unlabelled)
     labelled = [r for r in main if r["dataset"] not in unlabelled]
+    test = [r for r in labelled if split_of(r) == "test"] or labelled
     f1 = {
-        label: statistics.fmean(_quality(r, "f1") for r in labelled if r["label"] == label)
+        label: statistics.fmean([_quality(r, "f1") for r in test if r["label"] == label] or [0.0])
         for label in rank
     }
     best = max(rank, key=lambda label: (f1[label], -rank[label]["overall"]), default=None)
@@ -282,3 +405,116 @@ def summarize(runs, unlabelled=frozenset()):
     return dict(
         by_method_dataset=list(_group(main, unlabelled)), rank=rank, best=best, scaling=scaling
     )
+
+
+# Seed-averaged F1 per (dataset, split) → label → series; failures count as 0.
+def per_series(runs, unlabelled=frozenset()):
+    raw = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    for r in runs:
+        skip = r["dataset"] in unlabelled or r["dataset"] == "scaling" or split_of(r) == "tune"
+        if skip or (r["status"] == "ok" and r["f1"] is None):
+            continue
+        raw[r["dataset"], split_of(r)][r["label"]][r["series"]].append(_quality(r, "f1"))
+    return {
+        key: {label: {s: statistics.fmean(v) for s, v in ser.items()} for label, ser in by.items()}
+        for key, by in raw.items()
+    }
+
+
+def wilcoxon(x, y):
+    from scipy.stats import wilcoxon as test
+
+    if all(a == b for a, b in zip(x, y, strict=True)):
+        return 0.0, 1.0
+    res = test(x, y, zero_method="zsplit")
+    p = float(res.pvalue)
+    return float(res.statistic), 1.0 if math.isnan(p) else p
+
+
+def holm(rows):
+    order = sorted(range(len(rows)), key=lambda i: rows[i]["p"])
+    running = 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (len(rows) - rank) * rows[i]["p"]))
+        rows[i]["p_holm"] = running
+    return rows
+
+
+GUARANTEED = {"labelling": "output guarantee (FR-025): measured, never deleted"}
+
+
+def _bootstrap(diffs, n=1000):
+    d = np.asarray(diffs, dtype=float)
+    means = np.random.default_rng(0).choice(d, (n, len(d))).mean(axis=1)
+    return float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
+
+
+def _component(label):
+    if label == "v1":
+        return "v1"
+    return label.removeprefix("full-") if label.startswith("full-") else None
+
+
+# ΔF1 = F1(variant) − F1(full) per (component, dataset, split), seed-averaged per series; Holm
+# across the components of each (dataset, split); v1 is a separate comparison.
+def ablation(runs, unlabelled=frozenset()):
+    out = []
+    for (dataset, split), by_label in per_series(runs, unlabelled).items():
+        full = by_label.get("full")
+        if full is None:
+            continue
+        rows = []
+        for label, ser in by_label.items():
+            common = sorted(set(full) & set(ser))
+            if _component(label) is None or not common:
+                continue
+            x, y = [ser[s] for s in common], [full[s] for s in common]
+            diffs = [a - b for a, b in zip(x, y, strict=True)]
+            stat, p = wilcoxon(x, y)
+            lo, hi = _bootstrap(diffs)
+            rows.append(dict(component=_component(label), dataset=dataset, split=split))
+            rows[-1] |= dict(n=len(common), delta_f1=statistics.fmean(diffs), ci_low=lo, ci_high=hi)
+            rows[-1] |= dict(statistic=stat, p=p)
+        holm([r for r in rows if r["component"] != "v1"])
+        for r in rows:
+            r.setdefault("p_holm", r["p"])
+        out += rows
+    return out
+
+
+# Validation rows only: keep a component iff removing it lowers F1 significantly on >= 1 dataset
+# and raises it significantly on none. For v1, `keep` means the previous model is not beaten.
+def decisions(rows, alpha=0.05):
+    val = [r for r in rows if r["split"] == "validation"]
+    out = []
+    for comp in dict.fromkeys(r["component"] for r in val):
+        rs = [r for r in val if r["component"] == comp]
+        lower = [r["dataset"] for r in rs if r["delta_f1"] < 0 and r["p_holm"] < alpha]
+        higher = [r["dataset"] for r in rs if r["delta_f1"] > 0 and r["p_holm"] < alpha]
+        beaten = bool(lower) and not higher
+        if comp in GUARANTEED:
+            keep, reason = True, GUARANTEED[comp]
+        elif comp == "v1":
+            keep = not beaten
+            reason = f"full better on {lower}, worse on {higher}"
+        else:
+            keep = beaten
+            reason = f"removal lowers F1 on {lower}, raises it on {higher}"
+        out.append(dict(component=comp, keep=keep, reason=reason))
+    return out
+
+
+def paired_tests(runs, unlabelled=frozenset()):
+    out = []
+    for (dataset, split), by_label in per_series(runs, unlabelled).items():
+        rows = []
+        for a, b in itertools.combinations(by_label, 2):
+            common = sorted(set(by_label[a]) & set(by_label[b]))
+            if not common:
+                continue
+            x, y = [by_label[a][s] for s in common], [by_label[b][s] for s in common]
+            stat, p = wilcoxon(x, y)
+            rows.append(dict(dataset=dataset, split=split, a=a, b=b, n=len(common)))
+            rows[-1] |= dict(statistic=stat, p=p)
+        out += holm(rows)
+    return out

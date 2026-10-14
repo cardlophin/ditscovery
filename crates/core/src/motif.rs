@@ -1,5 +1,7 @@
 use crate::config::{Config, MotifCfg};
 use crate::distance::{Distance, resample, znorm};
+use crate::fitness::{NullScale, pair_dist};
+use crate::index::{CandidateIndex, grid};
 use crate::series::Stats;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +23,12 @@ pub struct Raw {
     pub cohesion: f64,
     pub mean_len: f64,
     pub stretch: f64,
+    pub extent: f64,
+    pub outsider: f64,
+    pub scale: f64,
+    pub margin: f64,
+    pub coverage: f64,
+    pub quality: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,11 +51,20 @@ pub struct Ctx<'a> {
     pub stats: Stats,
     pub cfg: &'a Config,
     pub dist: Distance,
+    pub min_std: f64,
+    pub index: CandidateIndex,
+    pub null: NullScale,
 }
 
 impl<'a> Ctx<'a> {
     pub fn new(x: &'a [f64], cfg: &'a Config) -> Self {
-        Self { x, stats: Stats::new(x), cfg, dist: cfg.distance.distance() }
+        let (stats, dist, m) = (Stats::new(x), cfg.distance.distance(), &cfg.motif);
+        let min_std = m.min_std;
+        let r = m.max_stretch.sqrt();
+        let lens = grid(m.min_len as f64 / r, m.max_len as f64 * r, x.len());
+        let index = CandidateIndex::build(x, &stats, &lens, dist.znorm(), min_std);
+        let null = NullScale::build(x, &stats, cfg, dist, min_std);
+        Self { x, stats, cfg, dist, min_std, index, null }
     }
 
     pub fn n(&self) -> usize {
@@ -59,20 +76,41 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn is_flat(&self, g: &Segment) -> bool {
-        self.stats.mean_std(g.start as usize, g.len as usize).1 < self.cfg.motif.min_std
+        self.stats.mean_std(g.start as usize, g.len as usize).1 < self.min_std
+    }
+
+    pub fn d(&self, a: &[f64], b: &[f64], row: &mut [f64]) -> f64 {
+        pair_dist(self.dist, self.cfg.fitness.cid, a, b, row)
     }
 }
 
-// Per-worker buffers so evaluation never allocates.
+// Per-worker buffers so evaluation never allocates (after the first call grows `cand`).
 pub struct Scratch {
-    proto: Vec<f64>,
-    v: Vec<f64>,
-    row: Vec<f64>,
+    pub(crate) proto: Vec<f64>,
+    pub(crate) v: Vec<f64>,
+    pub(crate) alt: Vec<f64>,
+    pub(crate) row: Vec<f64>,
+    pub(crate) cand: Vec<(f32, u32)>,
+    pub(crate) rows: Vec<f64>,
+    pub(crate) pair: Vec<f64>,
+    pub(crate) member: Vec<f64>,
+    pub(crate) sorted: Vec<f64>,
 }
 
 impl Scratch {
     pub fn new(max_len: usize) -> Self {
-        Self { proto: vec![0.0; max_len], v: vec![0.0; max_len], row: vec![0.0; max_len + 1] }
+        let buf = vec![0.0; max_len];
+        Self {
+            proto: buf.clone(),
+            v: buf.clone(),
+            alt: buf,
+            row: vec![0.0; max_len + 1],
+            cand: Vec::new(),
+            rows: Vec::new(),
+            pair: Vec::new(),
+            member: Vec::new(),
+            sorted: Vec::new(),
+        }
     }
 }
 
@@ -81,15 +119,23 @@ pub fn target_len(segs: &[Segment]) -> usize {
     (total as f64 / segs.len() as f64).round() as usize
 }
 
-fn load(g: &Segment, ctx: &Ctx, out: &mut [f64]) {
+pub(crate) fn load(g: &Segment, ctx: &Ctx, out: &mut [f64]) {
     resample(&ctx.x[g.start as usize..g.end() as usize], out);
     if ctx.dist.znorm() {
         znorm(out);
     }
 }
 
+// Occurrences are compared resampled to at most EVAL_RES points, so the cost does not grow with
+// the motif length (Mallat motifs are ~1000 points).
+pub const EVAL_RES: usize = 256;
+
+pub fn eval_len(segs: &[Segment]) -> usize {
+    target_len(segs).min(EVAL_RES)
+}
+
 pub fn prototype(segs: &[Segment], ctx: &Ctx, s: &mut Scratch) -> usize {
-    let l = target_len(segs);
+    let l = eval_len(segs);
     s.proto[..l].fill(0.0);
     for g in segs {
         load(g, ctx, &mut s.v[..l]);
@@ -102,32 +148,10 @@ pub fn prototype(segs: &[Segment], ctx: &Ctx, s: &mut Scratch) -> usize {
 
 pub fn dist_to_proto(g: &Segment, l: usize, ctx: &Ctx, s: &mut Scratch) -> f64 {
     load(g, ctx, &mut s.v[..l]);
-    ctx.dist.dist(&s.v[..l], &s.proto[..l], &mut s.row)
+    ctx.d(&s.v[..l], &s.proto[..l], &mut s.row)
 }
 
-pub fn evaluate(segs: &[Segment], ctx: &Ctx, s: &mut Scratch) -> Raw {
-    let l = prototype(segs, ctx, s);
-    let k = segs.len() as f64;
-    let cohesion = segs.iter().map(|g| dist_to_proto(g, l, ctx, s)).sum::<f64>() / k;
-    let (lo, hi, sum) =
-        segs.iter().fold((u32::MAX, 0, 0), |(a, b, c), g| (a.min(g.len), b.max(g.len), c + g.len));
-    Raw {
-        support: segs.len() as u32,
-        cohesion,
-        mean_len: sum as f64 / k,
-        stretch: hi as f64 / lo as f64,
-    }
-}
-
-pub fn objectives(raw: &Raw, m: &MotifCfg, c_ref: f64) -> [f64; 3] {
-    let scaled =
-        |hi: u32, lo: u32, v: f64| if hi == lo { 0.0 } else { (hi as f64 - v) / (hi - lo) as f64 };
-    [
-        scaled(m.max_occ, m.min_occ, raw.support as f64),
-        raw.cohesion / c_ref,
-        scaled(m.max_len, m.min_len, raw.mean_len),
-    ]
-}
+pub use crate::fitness::evaluate;
 
 pub fn align(segs: &[Segment], ctx: &Ctx) -> (Vec<f64>, Vec<Vec<f64>>) {
     let l = target_len(segs);
@@ -155,4 +179,16 @@ pub fn jaccard(a: &[Segment], b: &[Segment]) -> f64 {
     let total = |s: &[Segment]| s.iter().map(|g| g.len as u64).sum::<u64>();
     let union = total(a) + total(b) - inter;
     if union == 0 { 0.0 } else { inter as f64 / union as f64 }
+}
+
+// Overlap relative to the smaller set (sorted segments).
+pub fn containment(a: &[Segment], b: &[Segment]) -> f64 {
+    let (mut i, mut j, mut inter) = (0, 0, 0u64);
+    while i < a.len() && j < b.len() {
+        inter += a[i].end().min(b[j].end()).saturating_sub(a[i].start.max(b[j].start)) as u64;
+        if a[i].end() < b[j].end() { i += 1 } else { j += 1 }
+    }
+    let covered = |s: &[Segment]| s.iter().map(|g| g.len as u64).sum::<u64>();
+    let small = covered(a).min(covered(b));
+    if small == 0 { 0.0 } else { inter as f64 / small as f64 }
 }
